@@ -1,0 +1,35 @@
+# 데이터·결과물은 git에 올리지 않는다 (CLAUDE.md 4장)
+data/*
+!data/.gitkeep
+outputs/*
+!outputs/.gitkeep
+
+# 외부 코드는 각자 원래 저장소에서 클론한다
+third_party/*
+!third_party/README.md
+
+# 모델 가중치·대용량 파일
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.onnx
+*.zip
+*.tar
+*.tar.gz
+*.tar.xz
+*.blend1
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+build/
+dist/
+
+# 에디터·OS
+.vscode/
+.idea/
+.DS_Store
