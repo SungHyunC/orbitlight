@@ -9,7 +9,13 @@
 ```bash
 git clone https://github.com/tpark94/spnv2.git third_party/spnv2
 git -C third_party/spnv2 checkout debee80
+git -C third_party/spnv2 apply ../patches/spnv2-savemat-none.patch
 ```
+
+### 패치
+- `patches/spnv2-savemat-none.patch`: 평가 마지막에 이미지별 결과(`per_sample_performance.mat`, `predictions_pose.mat`)를
+  저장할 때, heatmap 헤드가 자세 계산을 포기한(reject) 샘플의 `None` 값을 최신 SciPy가 저장하지 못해 멈춘다.
+  `None`을 `NaN`으로 바꿔 저장하도록 고쳤다. 평균 점수 계산에는 영향이 없다 (패치 전후 sunlamp 결과 동일).
 
 ## SPNv2 공개 학습 가중치
 

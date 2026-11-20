@@ -7,6 +7,7 @@ outputs/*
 # 외부 코드는 각자 원래 저장소에서 클론한다
 third_party/*
 !third_party/README.md
+!third_party/patches/
 
 # 모델 가중치·대용량 파일
 *.pth

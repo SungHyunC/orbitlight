@@ -1,0 +1,49 @@
+diff --git a/core/engine/inference.py b/core/engine/inference.py
+index 2b9fa31..11d683d 100644
+--- a/core/engine/inference.py
++++ b/core/engine/inference.py
+@@ -11,6 +11,7 @@ from __future__ import print_function
+ import os
+ import logging
+ import time
++import numpy as np  # [OrbitLight patch] used by _fill_none
+ from scipy.io import savemat
+ 
+ import torch
+@@ -31,6 +32,18 @@ def _get_metric_unit(name):
+ 
+     return unit
+ 
++def _fill_none(d):
++    """ [OrbitLight patch] Replace None entries (e.g., rejected heatmap poses) with NaN
++        so that scipy.io.savemat can write them. Newer SciPy refuses None. """
++    out = {}
++    for k, v in d.items():
++        if isinstance(v, list) and any(e is None for e in v):
++            ref = next((e for e in v if e is not None), None)
++            shape = np.shape(ref) if ref is not None else ()
++            v = [np.full(shape, np.nan) if e is None else e for e in v]
++        out[k] = v
++    return out
++
+ def do_valid(epoch, cfg, model, data_loader, camera, keypts_true_3D,
+                 valid_fraction=None, log_dir=None, device=torch.device('cpu')):
+ 
+@@ -258,7 +271,7 @@ def do_valid(epoch, cfg, model, data_loader, camera, keypts_true_3D,
+ 
+         # Save individual performances
+         errorfn = os.path.join(log_dir, 'per_sample_performance.mat')
+-        savemat(errorfn, per_sample_metrics, appendmat=False)
++        savemat(errorfn, _fill_none(per_sample_metrics), appendmat=False)
+         logger.info(f'Per-sample performances saved to {errorfn}')
+ 
+         # Write predictions
+@@ -266,7 +279,7 @@ def do_valid(epoch, cfg, model, data_loader, camera, keypts_true_3D,
+         # savemat(predfn, {'hmap': heatmaps, 'hmap_q': q_hmap, 'hmap_t': t_hmap, 'eff_R': R_reg, 'eff_t': t_reg}, appendmat=False)
+ 
+         predfn = os.path.join(log_dir, 'predictions_pose.mat')
+-        savemat(predfn, {'heat_q': q_hmap, 'heat_t': t_hmap, 'effi_R': R_reg, 'effi_t': t_reg, 'bbox': bbox_reg, 'reject': h_reject}, appendmat=False)
++        savemat(predfn, _fill_none({'heat_q': q_hmap, 'heat_t': t_hmap, 'effi_R': R_reg, 'effi_t': t_reg, 'bbox': bbox_reg, 'reject': h_reject}), appendmat=False)
+         logger.info(f'Pose predictions saved to {predfn}')
+ 
+     return metrics['final_pose'].avg
