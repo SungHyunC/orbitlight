@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orbitlight"
+version = "0.0.1"
+description = "Orbital illumination failure maps for spacecraft pose estimation"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "torch",
+    "torchvision",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "pandas",
+    "opencv-python-headless",
+    "tqdm",
+    "pyyaml",
+    "mujoco",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
