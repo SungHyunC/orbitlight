@@ -9,3 +9,8 @@ scipy==1.17.1
 torch==2.14.1+cu130
 torchvision==0.29.1+cu130
 tqdm==4.70.1
+# SPNv2 (third_party/spnv2) 의존성. albumentations는 1.x API를 써서 2.x 불가
+albumentations==1.4.24
+yacs==0.1.8
+plyfile==1.1.5
+torchinfo==1.8.0
