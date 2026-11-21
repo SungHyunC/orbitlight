@@ -130,7 +130,7 @@ transfer to real lighting. The failure map is useful for finding weaknesses, but
 
 Possible causes and next experiments:
 - Renderer gap: one fixed material/texture setup → randomize materials and textures in the renders (domain randomization) — **tested in Phase 3c**
-- Geometry gap: some SPIN model keypoints differ from the SPEED+ keypoints by 18–25 mm → render labels may be slightly off
+- Geometry gap: checked and ruled out as a major cause — the SPIN model outline matches SPEED+ images to ~2 px (about 5 mm) and the keypoints sit in the same place relative to both (an earlier "18–25 mm" figure measured distance to the nearest mesh vertex, not to the actual feature)
 - Nearly invisible back-lit images may dilute the training signal → tune the render share and phase-angle distribution
 - One run per condition, so run-to-run variance is unknown → repeat training
 
@@ -181,10 +181,13 @@ What we learned:
 - On sunlamp the render-trained model now matches the control; on lightbox it is still slightly worse. **It does not yet beat
   the control on real lighting**, so the renders are not yet a net real-world improvement.
 - Translation (position) error is higher for both render-trained models than for the control (lightbox mean 0.30 m vs 0.22 m,
-  0.38 m with fixed materials). Rotation is now close to the control, so the remaining gap may come from geometry: some SPIN model
-  keypoints differ from SPEED+ by 18–25 mm, which shifts the labels of every render.
+  0.38 m with fixed materials). The cause is not yet known. A model-geometry mismatch was checked and ruled out: the SPIN model outline lines up with
+  SPEED+ images to about 2 px (~5 mm), with no systematic shift.
+- Caveat: the render-trained models saw 8,000 SPEED+ images versus 16,000 for the control (same number of training steps),
+  so part of the remaining HIL gap may come from seeing fewer SPEED+ images rather than from the renders. One run per condition.
 
-Next: correct the geometry/keypoint mismatch, tune the render share and phase-angle distribution, and repeat training runs to measure run-to-run variance.
+Next: add renders on top of the full SPEED+ set instead of replacing half of it, tune the render share and phase-angle distribution,
+and repeat training runs to measure run-to-run variance.
 
 Reproduce (after Phase 3b):
 ```bash
