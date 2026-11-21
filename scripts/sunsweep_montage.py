@@ -11,9 +11,12 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from scipy.io import loadmat
 
 ROOT = Path(__file__).resolve().parents[1]
+import sys  # noqa: E402
+
+sys.path.insert(0, str(ROOT / "src"))
+from orbitlight.eval.spnv2_results import load_per_sample  # noqa: E402
 
 
 def main() -> int:
@@ -30,7 +33,7 @@ def main() -> int:
     rows = list(csv.DictReader(open(dom / "meta.csv")))
     mat = ROOT / "outputs" / "spnv2_eval_renders" / a.run / a.weights / "efficientdet_d3" / "full_config" / "sunsweep" \
         / "per_sample_performance.mat"
-    eR = np.ravel(loadmat(mat)["heat_eR"]) if mat.exists() else None
+    eR = load_per_sample(mat)["heat_eR"] if mat.exists() else None
     phases = [float(x) for x in a.phases.split(",")]
     T = a.tile
     lines = []

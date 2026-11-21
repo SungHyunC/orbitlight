@@ -23,9 +23,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
-from scipy.io import loadmat  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+import sys  # noqa: E402
+
+sys.path.insert(0, str(ROOT / "src"))
+from orbitlight.eval.spnv2_results import failed as _failed, load_per_sample  # noqa: E402
 FAIL_DEG = 10.0
 # dataviz 기본 팔레트: 순차(sequential) 파랑 100→700, 범주형 1~3번
 SEQ = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
@@ -36,13 +39,11 @@ HIL_FAIL = {"offline": {"lightbox": 0.081, "sunlamp": 0.130}}
 
 
 def per_sample(path: Path) -> dict[str, np.ndarray]:
-    m = loadmat(path)
-    return {k: np.ravel(v) for k, v in m.items() if not k.startswith("__")}
+    return load_per_sample(path)  # 거부 이미지를 NaN으로 채워 이미지 순서와 맞춤
 
 
 def failed(ps: dict[str, np.ndarray]) -> np.ndarray:
-    e = ps["heat_eR"]
-    return (~np.isfinite(e)) | (e > FAIL_DEG) | (ps["h_reject"] > 0)
+    return _failed(ps, FAIL_DEG)
 
 
 def bootstrap_ci(fail: np.ndarray, pose: np.ndarray, n: int = 2000, seed: int = 0) -> tuple[float, float]:
@@ -113,7 +114,7 @@ def main() -> int:
         w.writerows(cells)
 
     # ---------------- 그림 ----------------
-    fig = plt.figure(figsize=(12, 5.2), dpi=150)
+    fig = plt.figure(figsize=(13, 6.0), dpi=150)
     fig.patch.set_facecolor(SURFACE)
     cmap = LinearSegmentedColormap.from_list("seq", SEQ)
     vmax = max(0.5, float(np.ceil(max(c["fail_rate"] for c in cells) * 10) / 10))
@@ -137,12 +138,13 @@ def main() -> int:
     axp.set_yticklabels(["0°", "40°", "80°", "120°", "160°"], color=INK2, fontsize=8)
     axp.set_rlabel_position(22.5)
     axp.set_xticks(np.radians([0, 90, 180, 270]))
-    axp.set_xticklabels(["sun from\nimage right", "from top", "from left", "from bottom"], color=INK2, fontsize=8)
+    axp.set_xticklabels(["right", "top", "left", "bottom"], color=INK2, fontsize=8)
+    axp.tick_params(axis="x", pad=6)
     axp.grid(color=GRID, lw=0.6)
-    axp.set_title("(a) Failure rate by sun direction\ncenter = front-lit (phase 0°), edge = back-lit (phase 160°)",
-                  color=INK, fontsize=10, loc="left", pad=14)
+    axp.set_title("(a) Failure rate by sun direction\nangle: side the sun is on (in the image)\n"
+                  "radius: phase angle, center = front-lit, edge = back-lit", color=INK, fontsize=9.5, loc="left", pad=22)
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(0, vmax))
-    cb = fig.colorbar(sm, ax=axp, shrink=0.75, pad=0.1)
+    cb = fig.colorbar(sm, ax=axp, shrink=0.7, pad=0.14)
     cb.set_label(f"failure rate (rotation error > {FAIL_DEG:g}° or rejected)", color=INK2, fontsize=8)
     cb.ax.tick_params(colors=INK2, labelsize=8)
     cb.ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
@@ -170,12 +172,12 @@ def main() -> int:
     ax.grid(True, axis="y", color=GRID, lw=0.8)
     for s in ("top", "right"):
         ax.spines[s].set_visible(False)
-    ax.set_title(f"(b) SPNv2 ({a.weights} weights) failure rate vs sun phase angle (shaded: 95% CI over poses)",
-                 color=INK, fontsize=10, loc="left")
+    ax.set_title(f"(b) SPNv2 ({a.weights} weights) failure rate vs sun phase angle\n"
+                 "averaged over 8 azimuths; shaded = 95% bootstrap CI over poses", color=INK, fontsize=9.5, loc="left")
     leg = ax.legend(loc="upper left", frameon=False, fontsize=8)
     for t in leg.get_texts():
         t.set_color(INK)
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0, 1, 0.94))   # 극좌표 제목 윗줄이 잘리지 않게
     fig_path = ROOT / "outputs" / "figures" / f"failure_map_{a.run}_{a.weights}.png"
     fig_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(fig_path, facecolor=SURFACE)
