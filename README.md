@@ -6,8 +6,9 @@ A lighting simulator for orbital scenes that maps **under which sun conditions a
 (a "failure map"), and tests whether targeted synthetic data can reduce those failures.
 
 > Status: v0.1 — Phase 1 (reproduce the problem), Phase 2 (sun-angle rendering) and Phase 3 (failure map + retraining experiment) done.
-> The retraining result is **mixed**: back-lit failures halved inside our own renderer, but performance on real-lighting
-> hardware-in-the-loop images got worse (Phase 3b below).
+> The first retraining run was **mixed**: back-lit failures halved inside our own renderer, but performance on real-lighting
+> hardware-in-the-loop images got worse (Phase 3b). Randomizing materials and textures in the renders removed most of that
+> loss while keeping the renderer-side gain (Phase 3c).
 
 ## TL;DR
 
@@ -16,6 +17,7 @@ A lighting simulator for orbital scenes that maps **under which sun conditions a
 | Reproduce the gap | SPNv2 public weights: pose score is 5–8× worse on real-lighting (HIL) images than on synthetic; ~1 in 10 HIL images is off by >10° |
 | Failure map | As the sun phase angle goes from 0° to 160°, the failure rate rises from 1% to 71%. The key variable is how much of the satellite is in shadow |
 | Retraining | Mixing in back-lit renders cuts failures on the same-renderer sun-angle test from 26% to 14%, but raises HIL failures from 9% to 11% (lightbox) and 16% to 21% (sunlamp) |
+| Domain randomization | Randomizing materials/textures in the same renders keeps the sun-angle gain (26% → 14%) and brings sunlamp failures back to the control level (15.1% vs 15.7%); lightbox is still slightly worse (9.9% vs 8.9%) |
 | Lesson | An improvement on a synthetic failure map does not imply a real-world improvement. **Claims must be checked on real-lighting data** |
 
 ## Problem
@@ -126,8 +128,8 @@ What we learned:
 Conclusion: **an improvement on a synthetic failure map does not guarantee a real-world improvement.** The current renders do not
 transfer to real lighting. The failure map is useful for finding weaknesses, but any improvement claim has to be confirmed on real-lighting (HIL) data.
 
-Possible causes and next experiments (not yet tested):
-- Renderer gap: one fixed material/texture setup → randomize materials and textures in the renders (domain randomization)
+Possible causes and next experiments:
+- Renderer gap: one fixed material/texture setup → randomize materials and textures in the renders (domain randomization) — **tested in Phase 3c**
 - Geometry gap: some SPIN model keypoints differ from the SPEED+ keypoints by 18–25 mm → render labels may be slightly off
 - Nearly invisible back-lit images may dilute the training signal → tune the render share and phase-angle distribution
 - One run per condition, so run-to-run variance is unknown → repeat training
@@ -145,6 +147,56 @@ DATA=speedplus_ft_v01 EXP=ft_v01 BATCH=4 bash scripts/finetune_spnv2.sh
 WEIGHTS="ftctrl_v01:final ft_v01:final" bash scripts/eval_spnv2_baseline.sh
 RUN=speedplus_sunsweep_v01 WEIGHTS="ftctrl_v01:final ft_v01:final" bash scripts/eval_spnv2_renders.sh
 python scripts/compare_finetune.py --weights offline ftctrl_v01:final ft_v01:final
+```
+
+### Phase 3c — Randomizing materials and textures (domain randomization)
+
+Phase 3b suggested the model was adapting to one fixed look of our renderer. To test that, the **same 8,000 training renders**
+were rendered again with only the surface appearance changed per image. Poses, sun directions, sun strength, the SPEED+ images
+and the train/validation split are identical to Phase 3b (checked file by file), so the material setup is the only difference.
+
+- Per image: main body brightness 0.2–0.9, metallic (0 or 0.3–1), roughness 0.1–0.8; solar panel brightness and gloss;
+  other parts' brightness ×0.6–1.4.
+- A procedural noise texture on every part: pattern size 2–200 per metre, brightness contrast, roughness contrast and surface bump, all random.
+- With randomization off, the renderer still reproduces the earlier renders (max pixel difference 1/255).
+
+![domain randomization comparison](docs/figures/finetune_compare_dr.png)
+
+| Model | lightbox E_pose | sunlamp E_pose | lightbox fail | sunlamp fail | Sun-angle test fail 0–40° | 60–100° | 120–160° |
+|---|---|---|---|---|---|---|---|
+| Control: SPEED+ only | 0.164 | 0.278 | 8.9% | 15.7% | 3.2% | 16.3% | 53.0% |
+| + renders (fixed materials, 3b) | 0.211 | 0.353 | 10.7% | 20.6% | 0.7% | 5.0% | 31.5% |
+| + renders (randomized materials, 3c) | 0.181 | 0.267 | **9.9%** | **15.1%** | **0.7%** | **5.0%** | **32.0%** |
+
+Paired McNemar tests on the same HIL images (images only one of the two models fails):
+
+| Comparison | lightbox | sunlamp |
+|---|---|---|
+| Randomized vs fixed materials | 216 vs 158, p = 0.003 → **randomized better** | 224 vs 72, p = 3e-19 → **randomized better** |
+| Randomized vs control | 208 vs 276, p = 0.002 → control still better | 168 vs 153, p = 0.43 → no difference |
+
+What we learned:
+- **Randomizing appearance recovers most of the real-lighting loss** while the sun-angle gain is unchanged (overall 13.9% vs 13.6%).
+  So the Phase 3b HIL drop was largely caused by the single fixed material setup, not by the back-lit renders themselves.
+- On sunlamp the render-trained model now matches the control; on lightbox it is still slightly worse. **It does not yet beat
+  the control on real lighting**, so the renders are not yet a net real-world improvement.
+- Translation (position) error is higher for both render-trained models than for the control (lightbox mean 0.30 m vs 0.22 m,
+  0.38 m with fixed materials). Rotation is now close to the control, so the remaining gap may come from geometry: some SPIN model
+  keypoints differ from SPEED+ by 18–25 mm, which shifts the labels of every render.
+
+Next: correct the geometry/keypoint mismatch, tune the render share and phase-angle distribution, and repeat training runs to measure run-to-run variance.
+
+Reproduce (after Phase 3b):
+```bash
+python scripts/sunsweep.py jobs --run speedplus_trainrender_dr_v01 --pose-source synthetic/train.json \
+    --n-poses 4000 --random-per-pose 2 --phase-max 170 --strength-range 3,5 --color-depth 8 --seed 1 --randomize-materials
+python scripts/sunsweep.py render --run speedplus_trainrender_dr_v01   # ~55 min
+python scripts/sunsweep.py post --run speedplus_trainrender_dr_v01
+python scripts/build_finetune_set.py --name speedplus_ftdr_v01 --renders speedplus_trainrender_dr_v01 --speed-n 8000 --val-n 500
+DATA=speedplus_ftdr_v01 EXP=ftdr_v01 BATCH=4 bash scripts/finetune_spnv2.sh
+WEIGHTS="ftdr_v01:final" bash scripts/eval_spnv2_baseline.sh
+RUN=speedplus_sunsweep_v01 WEIGHTS="ftdr_v01:final" bash scripts/eval_spnv2_renders.sh
+python scripts/compare_finetune.py --weights offline ftctrl_v01:final ft_v01:final ftdr_v01:final
 ```
 
 The full experiment log is in [`experiments/LOG.md`](experiments/LOG.md) (Korean).

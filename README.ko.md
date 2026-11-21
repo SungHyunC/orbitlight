@@ -6,7 +6,8 @@
 **어떤 조명에서 실패하는지 "실패 지도(failure map)"로 보여주고**, 그 실패를 줄이는 합성 데이터를 만드는 프로젝트.
 
 > 상태: v0.1 — Phase 1(문제 재현), Phase 2(태양 각도 렌더링), Phase 3(실패 지도 + 재학습 실험) 완료.
-> 재학습 결과는 **엇갈렸다**: 우리 렌더러 안에서는 역광 실패가 절반으로 줄었지만, 실물 조명 시험에서는 오히려 나빠졌다 (아래 Phase 3b).
+> 첫 재학습 결과는 **엇갈렸다**: 우리 렌더러 안에서는 역광 실패가 절반으로 줄었지만, 실물 조명 시험에서는 오히려 나빠졌다 (Phase 3b).
+> 렌더의 재질·텍스처를 무작위로 바꾸자 렌더러 쪽 개선은 그대로 두고 실물 조명 손실을 대부분 되찾았다 (Phase 3c).
 
 ## 요약
 
@@ -15,6 +16,7 @@
 | 문제 재현 | SPNv2 공개 가중치: 합성 → 실물 조명(HIL) 종합 점수 5~8배 악화, 10장 중 1장꼴로 10° 이상 실패 |
 | 실패 지도 | 태양 위상각 0° → 160°로 가면 실패율 1% → 71%. 핵심 변수는 위성 표면이 그림자에 덮인 비율 |
 | 재학습 | 역광 렌더를 섞으면 같은 렌더러의 태양 실험 실패 26% → 14%, 하지만 실물 조명 HIL 실패는 9% → 11%, 16% → 21%로 증가 |
+| 도메인 무작위화 | 같은 렌더에서 재질·텍스처만 무작위로 바꾸면 태양 실험 개선(26% → 14%)은 유지되고, sunlamp 실패는 비교군 수준으로 돌아온다 (15.1% vs 15.7%). lightbox는 아직 약간 나쁘다 (9.9% vs 8.9%) |
 | 교훈 | 합성 데이터로 만든 실패 지도에서 좋아졌다고 실물에서 좋아지는 것은 아니다. **실물 조명 데이터로 꼭 확인해야 한다** |
 
 ## 문제 정의
@@ -125,8 +127,8 @@ python scripts/failure_map.py --run speedplus_sunsweep_v01
 결론: **합성 실패 지도에서의 개선이 실물 개선을 보장하지 않는다.** 지금 렌더는 실물 조명으로 옮겨 가지 않는다.
 실패 지도는 약점을 찾는 데는 유용하지만, 개선 주장은 반드시 실물 조명 데이터(HIL)로 확인해야 한다.
 
-가능한 원인과 다음 실험 (아직 검증 안 함):
-- 렌더러 차이: 재질·텍스처를 한 가지로 고정했다 → 렌더에 재질·텍스처 무작위화(domain randomization)
+가능한 원인과 다음 실험:
+- 렌더러 차이: 재질·텍스처를 한 가지로 고정했다 → 렌더에 재질·텍스처 무작위화(domain randomization) — **Phase 3c에서 검증**
 - 형상 차이: SPIN 모형과 SPEED+ 키포인트가 일부 18~25mm 다르다 → 렌더 라벨이 조금 어긋날 수 있음
 - 거의 안 보이는 역광 이미지가 학습 신호를 흐릴 수 있다 → 렌더 비율·위상각 분포 조절
 - 학습 1회씩이라 학습 간 편차를 아직 모른다 → 반복 학습
@@ -144,6 +146,55 @@ DATA=speedplus_ft_v01 EXP=ft_v01 BATCH=4 bash scripts/finetune_spnv2.sh
 WEIGHTS="ftctrl_v01:final ft_v01:final" bash scripts/eval_spnv2_baseline.sh
 RUN=speedplus_sunsweep_v01 WEIGHTS="ftctrl_v01:final ft_v01:final" bash scripts/eval_spnv2_renders.sh
 python scripts/compare_finetune.py --weights offline ftctrl_v01:final ft_v01:final
+```
+
+### Phase 3c — 재질·텍스처 무작위화 (domain randomization, 도메인 무작위화)
+
+Phase 3b는 모델이 우리 렌더러의 고정된 모습 하나에 적응했을 가능성을 보여 줬다. 이를 확인하려고 **같은 학습용 렌더 8,000장**을
+표면 모습만 이미지마다 바꿔서 다시 렌더링했다. 자세, 태양 방향과 세기, SPEED+ 이미지, 학습/검증 나누기는 Phase 3b와 똑같다
+(파일 단위로 대조). 그래서 달라진 것은 재질뿐이다.
+
+- 이미지마다: 몸체 밝기 0.2~0.9, 금속성(metallic) 0 또는 0.3~1, 거칠기(roughness) 0.1~0.8 / 태양전지판 밝기와 광택 /
+  나머지 부품 밝기 ×0.6~1.4
+- 모든 부품에 절차적 노이즈 텍스처(procedural noise texture): 무늬 크기 1m당 2~200, 밝기 대비, 거칠기 대비, 표면 요철(bump)을 무작위로
+- 무작위화를 끄면 예전 렌더가 그대로 재현된다 (픽셀 차이 최대 1/255)
+
+![도메인 무작위화 비교](docs/figures/finetune_compare_dr.png)
+
+| 모델 | lightbox E_pose | sunlamp E_pose | lightbox 실패 | sunlamp 실패 | 태양 실험 실패 0~40° | 60~100° | 120~160° |
+|---|---|---|---|---|---|---|---|
+| 비교군: SPEED+만 | 0.164 | 0.278 | 8.9% | 15.7% | 3.2% | 16.3% | 53.0% |
+| + 렌더 (고정 재질, 3b) | 0.211 | 0.353 | 10.7% | 20.6% | 0.7% | 5.0% | 31.5% |
+| + 렌더 (무작위 재질, 3c) | 0.181 | 0.267 | **9.9%** | **15.1%** | **0.7%** | **5.0%** | **32.0%** |
+
+같은 HIL 이미지로 짝지은 McNemar 검정 (두 모델 중 한쪽만 실패한 이미지 수):
+
+| 비교 | lightbox | sunlamp |
+|---|---|---|
+| 무작위 재질 vs 고정 재질 | 216 vs 158, p = 0.003 → **무작위가 나음** | 224 vs 72, p = 3e-19 → **무작위가 나음** |
+| 무작위 재질 vs 비교군 | 208 vs 276, p = 0.002 → 비교군이 아직 나음 | 168 vs 153, p = 0.43 → 차이 없음 |
+
+알게 된 것:
+- **겉모습을 무작위로 바꾸면 실물 조명 손실이 대부분 사라지고**, 태양 실험 개선은 그대로다 (전체 13.9% vs 13.6%).
+  즉 Phase 3b의 HIL 악화는 역광 렌더 자체보다 **재질을 하나로 고정한 탓**이 컸다.
+- sunlamp에서는 렌더로 학습한 모델이 비교군과 같아졌고, lightbox에서는 아직 약간 나쁘다.
+  **실물 조명에서 비교군을 넘지는 못했다.** 아직 렌더가 실물 성능을 올려 준다고는 말할 수 없다.
+- 위치(translation) 오차는 렌더로 학습한 두 모델 모두 비교군보다 크다 (lightbox 평균 0.30m vs 0.22m, 고정 재질은 0.38m).
+  회전은 비교군에 가까워졌으므로, 남은 격차는 형상 차이일 수 있다: SPIN 모형의 키포인트 일부가 SPEED+와 18~25mm 달라서 모든 렌더의 라벨이 조금씩 어긋난다.
+
+다음: 형상·키포인트 차이 보정, 렌더 비율과 위상각 분포 조절, 학습 반복으로 편차 측정.
+
+재현 (Phase 3b 이후):
+```bash
+python scripts/sunsweep.py jobs --run speedplus_trainrender_dr_v01 --pose-source synthetic/train.json \
+    --n-poses 4000 --random-per-pose 2 --phase-max 170 --strength-range 3,5 --color-depth 8 --seed 1 --randomize-materials
+python scripts/sunsweep.py render --run speedplus_trainrender_dr_v01   # 약 55분
+python scripts/sunsweep.py post --run speedplus_trainrender_dr_v01
+python scripts/build_finetune_set.py --name speedplus_ftdr_v01 --renders speedplus_trainrender_dr_v01 --speed-n 8000 --val-n 500
+DATA=speedplus_ftdr_v01 EXP=ftdr_v01 BATCH=4 bash scripts/finetune_spnv2.sh
+WEIGHTS="ftdr_v01:final" bash scripts/eval_spnv2_baseline.sh
+RUN=speedplus_sunsweep_v01 WEIGHTS="ftdr_v01:final" bash scripts/eval_spnv2_renders.sh
+python scripts/compare_finetune.py --weights offline ftctrl_v01:final ft_v01:final ftdr_v01:final
 ```
 
 실험 기록은 [`experiments/LOG.md`](experiments/LOG.md) 참고 (한국어).
