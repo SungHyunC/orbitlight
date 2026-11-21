@@ -9,6 +9,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+source "$ROOT/scripts/_weights.sh"
 PY="${PY:-$HOME/anaconda3/envs/orbitlight/bin/python}"
 SPN="$ROOT/third_party/spnv2"
 CFG="$SPN/experiments/offline_train_full_config_phi3_BN.yaml"
@@ -32,8 +33,8 @@ mkdir -p "$OUT"
 for w in $WEIGHTS; do
     echo "[test] run=$RUN weights=$w"
     "$PY" -W ignore "$SPN/tools/test.py" --cfg "$CFG" "${common[@]}" \
-        VERBOSE False OUTPUT_DIR "$OUT/$w" LOG_DIR "$OUT/logs/$w" \
-        TEST.MODEL_FILE "$ROOT/outputs/pretrained/spnv2_efficientnetb3_fullconfig_${w}.pth.tar" \
-        TEST.TEST_CSV sunsweep/labels/test.csv > "$OUT/$w.log" 2>&1
-    tail -n 12 "$OUT/$w.log"
+        VERBOSE False OUTPUT_DIR "$OUT/${w/:/_}" LOG_DIR "$OUT/logs/${w/:/_}" \
+        TEST.MODEL_FILE "$(weights_path "$w")" \
+        TEST.TEST_CSV sunsweep/labels/test.csv > "$OUT/${w/:/_}.log" 2>&1
+    tail -n 12 "$OUT/${w/:/_}.log"
 done

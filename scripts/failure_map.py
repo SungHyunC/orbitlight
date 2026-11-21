@@ -46,6 +46,18 @@ def failed(ps: dict[str, np.ndarray]) -> np.ndarray:
     return _failed(ps, FAIL_DEG)
 
 
+def hil_fail(wdir: str) -> dict[str, float]:
+    """같은 가중치의 SPEED+ lightbox·sunlamp 실패율 (eval_spnv2_baseline.sh 결과가 있으면 거기서 계산)."""
+    out = {}
+    for d in ("lightbox", "sunlamp"):
+        f = ROOT / "outputs" / "spnv2_eval" / wdir / "efficientdet_d3" / "full_config" / d / "per_sample_performance.mat"
+        if f.exists():
+            out[d] = float(failed(per_sample(f)).mean())
+        elif d in HIL_FAIL.get(wdir, {}):
+            out[d] = HIL_FAIL[wdir][d]
+    return out
+
+
 def bootstrap_ci(fail: np.ndarray, pose: np.ndarray, n: int = 2000, seed: int = 0) -> tuple[float, float]:
     """자세 단위로 다시 뽑는 부트스트랩 95% 구간 (같은 자세의 이미지끼리는 독립이 아니므로)."""
     rng = np.random.default_rng(seed)
@@ -67,9 +79,10 @@ def main() -> int:
     p.add_argument("--run", default="speedplus_sunsweep_v01")
     p.add_argument("--weights", default="offline")
     a = p.parse_args()
+    wdir = a.weights.replace(":", "_")   # 평가 폴더 이름 (eval 스크립트와 같은 규칙)
 
     rows = list(csv.DictReader(open(ROOT / "outputs" / "renders" / a.run / "sunsweep" / "meta.csv")))
-    ps = per_sample(ROOT / "outputs" / "spnv2_eval_renders" / a.run / a.weights / "efficientdet_d3" / "full_config"
+    ps = per_sample(ROOT / "outputs" / "spnv2_eval_renders" / a.run / wdir / "efficientdet_d3" / "full_config"
                     / "sunsweep" / "per_sample_performance.mat")
     assert len(rows) == len(ps["heat_eR"]), (len(rows), len(ps["heat_eR"]))
     phase = np.array([float(r["phase_deg"]) for r in rows])
@@ -81,7 +94,7 @@ def main() -> int:
     # 렌더러 검증: 같은 자세의 SPEED+ 원본 이미지에서 SPNv2 오차
     syn_csv = ROOT / "data" / "speedplus" / "speedplusv2" / "synthetic" / "labels" / "validation.csv"
     syn_names = [line.split(",")[0].strip() for line in open(syn_csv)]
-    syn = per_sample(ROOT / "outputs" / "spnv2_eval" / a.weights / "efficientdet_d3" / "full_config" / "synthetic"
+    syn = per_sample(ROOT / "outputs" / "spnv2_eval" / wdir / "efficientdet_d3" / "full_config" / "synthetic"
                      / "per_sample_performance.mat")
     src_of_pose = {int(r["pose_id"]): r["source_image"] for r in rows}
     idx = [syn_names.index(src_of_pose[k]) for k in sorted(src_of_pose)]
@@ -98,7 +111,7 @@ def main() -> int:
         lo, hi = bootstrap_ci(fail[m], pose[m])
         by_phase.append(dict(phase_deg=ph, n=int(m.sum()), fail_rate=float(fail[m].mean()), ci_lo=lo, ci_hi=hi,
                              median_eR=float(np.nanmedian(eR[m]))))
-    with open(out_csv / f"{a.run}_{a.weights}_by_phase.csv", "w", newline="") as f:
+    with open(out_csv / f"{a.run}_{wdir}_by_phase.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(by_phase[0]))
         w.writeheader()
         w.writerows(by_phase)
@@ -108,7 +121,7 @@ def main() -> int:
             m = (phase == ph) & (az == z)
             cells.append(dict(phase_deg=ph, azimuth_deg=z, n=int(m.sum()), fail_rate=float(fail[m].mean()),
                               median_eR=float(np.nanmedian(eR[m]))))
-    with open(out_csv / f"{a.run}_{a.weights}_by_cell.csv", "w", newline="") as f:
+    with open(out_csv / f"{a.run}_{wdir}_by_cell.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(cells[0]))
         w.writeheader()
         w.writerows(cells)
@@ -161,7 +174,7 @@ def main() -> int:
     ax.plot(x, y, color=CAT["ours"], lw=2, marker="o", ms=5, label="OrbitLight renders (100 poses × 8 azimuths)")
     ax.axhline(syn_fail.mean(), color=INK2, lw=1, ls=(0, (1, 2)),
                label=f"SPEED+ synthetic, same 100 poses ({syn_fail.mean():.0%})")
-    for d, v in HIL_FAIL.get(a.weights, {}).items():
+    for d, v in hil_fail(wdir).items():
         ax.axhline(v, color=CAT[d], lw=1.2, ls=(0, (4, 3)), label=f"SPEED+ {d} (HIL), Phase 1 ({v:.1%})")
     ax.set_xticks(x)
     ax.set_xticklabels([f"{v:g}°" for v in x])
@@ -178,7 +191,7 @@ def main() -> int:
     for t in leg.get_texts():
         t.set_color(INK)
     fig.tight_layout(rect=(0, 0, 1, 0.94))   # 극좌표 제목 윗줄이 잘리지 않게
-    fig_path = ROOT / "outputs" / "figures" / f"failure_map_{a.run}_{a.weights}.png"
+    fig_path = ROOT / "outputs" / "figures" / f"failure_map_{a.run}_{wdir}.png"
     fig_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(fig_path, facecolor=SURFACE)
 

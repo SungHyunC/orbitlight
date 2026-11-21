@@ -11,6 +11,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+source "$ROOT/scripts/_weights.sh"
 PY="${PY:-$HOME/anaconda3/envs/orbitlight/bin/python}"
 SPN="$ROOT/third_party/spnv2"
 CFG="$SPN/experiments/offline_train_full_config_phi3_BN.yaml"
@@ -42,16 +43,16 @@ for d in $DOMAINS; do
 done
 
 for w in $WEIGHTS; do
-    model="$ROOT/outputs/pretrained/spnv2_efficientnetb3_fullconfig_${w}.pth.tar"
+    model="$(weights_path "$w")"
     for d in $DOMAINS; do
         json="${JSON[$d]}"
         csv="$d/labels/$(basename "${json%.json}").csv"
         echo "[test] weights=$w domain=$d"
         "$PY" -W ignore "$SPN/tools/test.py" --cfg "$CFG" "${common[@]}" \
             VERBOSE False \
-            OUTPUT_DIR "$OUT/$w" LOG_DIR "$OUT/logs/$w" \
+            OUTPUT_DIR "$OUT/${w/:/_}" LOG_DIR "$OUT/logs/${w/:/_}" \
             TEST.MODEL_FILE "$model" TEST.TEST_CSV "$csv" \
-            > "$OUT/$w.$d.log" 2>&1
-        tail -n 20 "$OUT/$w.$d.log"
+            > "$OUT/${w/:/_}.$d.log" 2>&1
+        tail -n 20 "$OUT/${w/:/_}.$d.log"
     done
 done
