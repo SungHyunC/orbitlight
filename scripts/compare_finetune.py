@@ -114,7 +114,7 @@ def main() -> int:
     ax.set_xlabel("Sun phase angle (0° = front-lit, 180° = back-lit)", color=INK2)
     ax.set_ylabel("Failure rate (rot. error > 10° or rejected)", color=INK2)
     ax.set_ylim(0, 1)
-    ax.set_title("(a) Held-out sun-angle test: 100 SPEED+ validation poses × 65 sun directions",
+    ax.set_title("(a) Sun-angle test (OrbitLight renderer; 100 held-out poses × 65 sun directions)",
                  color=INK, fontsize=10, loc="left")
     leg = ax.legend(loc="upper left", frameon=False, fontsize=9)
     for t in leg.get_texts():
