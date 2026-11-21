@@ -38,6 +38,28 @@ def floats(s: str) -> list[float]:
     return [float(x) for x in s.split(",") if x.strip()]
 
 
+def sample_material(rng: np.random.Generator) -> dict:
+    """도메인 무작위화(domain randomization)용 재질·텍스처 값 한 세트.
+
+    렌더러가 실제 위성 재질을 정확히 모르므로, 한 가지 모습에 과적합하지 않도록 넓게 흔든다.
+    이미지는 결국 흑백이므로 색은 밝기(gray)만 바꾼다. 이름은 blender_render.MATERIALS의 키.
+    """
+    body_metal = float(rng.uniform(0.3, 1.0)) if rng.random() < 0.4 else 0.0
+    mats = {
+        "Oro_-_Pulido": dict(gray=float(rng.uniform(0.2, 0.9)), metallic=body_metal,
+                             roughness=float(rng.uniform(0.1, 0.8))),
+        "Espejo_(1)": dict(gray=float(rng.uniform(0.01, 0.2)), roughness=float(rng.uniform(0.02, 0.4))),
+    }
+    for name, gray in (("Cromo", 0.56), ("Aluminio_-_Satinado", 0.92), ("Acero_-_Satinado", 0.57),
+                       ("Pintura_-_Esmaltado_brillante_(gris_oscuro)", 0.05), ("Revestimiento_-_Óxido_negro", 0.02)):
+        mats[name] = dict(gray=float(np.clip(gray * rng.uniform(0.6, 1.4), 0.0, 1.0)))
+    texture = dict(scale=float(np.exp(rng.uniform(np.log(2.0), np.log(200.0)))),   # 1/m, 로그 균등
+                   albedo_contrast=float(rng.uniform(0.0, 0.6)),
+                   roughness_contrast=float(rng.uniform(0.0, 0.5)),
+                   bump=float(rng.uniform(0.0, 0.5)))
+    return dict(materials=mats, texture=texture)
+
+
 def cmd_jobs(a) -> None:
     run = ROOT / "outputs" / "renders" / a.run
     run.mkdir(parents=True, exist_ok=True)
@@ -84,9 +106,15 @@ def cmd_jobs(a) -> None:
                     object_matrix=M.tolist(),
                 ))
         desc = f"{a.n_poses} poses × {len(conds)} sun conditions"
+    if a.randomize_materials:
+        # 자세·태양 방향 난수열과 분리 (같은 seed면 재질만 다르고 자세·태양은 무작위화 안 한 run과 똑같다)
+        mrng = np.random.default_rng(a.seed + 10007)
+        for j in jobs:
+            j["material"] = sample_material(mrng)
+        desc += " + randomized materials"
     cfg = dict(
         created=time.strftime("%Y-%m-%d %H:%M:%S"),
-        camera=camera, model=str(MODEL.relative_to(ROOT)), pose_source=a.pose_source, seed=a.seed,
+        camera=camera, model=str(MODEL.relative_to(ROOT)), pose_source=a.pose_source, seed=a.seed, randomize_materials=a.randomize_materials,
         render=dict(sun_strength=a.sun_strength, samples=a.samples, denoise=True, max_bounces=6, seed=0, exposure=0.0,
                     color_depth=a.color_depth),
         post=dict(noise_std=a.noise_std, noise_offset=a.noise_offset, jpg_quality=95),
@@ -179,6 +207,7 @@ def main() -> int:
     j.add_argument("--random-per-pose", type=int, default=0, help=">0이면 격자 대신 자세마다 무작위 태양 방향 N개 (학습용)")
     j.add_argument("--phase-max", type=float, default=170.0)
     j.add_argument("--strength-range", type=floats, default=floats("3,5"))
+    j.add_argument("--randomize-materials", action="store_true", help="이미지마다 재질·텍스처 무작위 (도메인 무작위화)")
     j.add_argument("--color-depth", default="16", choices=["8", "16"], help="raw PNG 비트 수 (8이면 디스크 절반)")
     r = sub.add_parser("render")
     r.add_argument("--run", required=True)

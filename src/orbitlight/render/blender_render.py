@@ -67,15 +67,81 @@ def setup_device(scene, device: str) -> None:
     scene.cycles.device = "GPU"
 
 
-def build_material(name: str):
+def build_material(name: str, randomize: bool = False):
+    """Principled BSDF (+ randomize이면 무작위화용 절차적 텍스처(noise)).
+
+    밝기 = 기본 밝기 × (1 + 4c·(noise - 0.5)), 거칠기 = 기본 거칠기 + 2c_r·(noise - 0.5), 법선 = noise 범프(bump).
+    (Blender noise 값은 대부분 0.3~0.7에 몰려 있어서 4배로 늘려야 무늬가 눈에 보인다.)
+    randomize=False면 텍스처 노드를 아예 만들지 않는다 (예전 run을 픽셀 단위로 똑같이 재현하기 위해:
+    세기 0인 범프 노드도 법선을 미세하게 바꿔 평균 0.2~0.6/255 차이가 났음).
+    """
     spec = MATERIALS.get(name, DEFAULT_MAT)
     m = bpy.data.materials.get(name) or bpy.data.materials.new(name)
     m.use_nodes = True
-    b = m.node_tree.nodes.get("Principled BSDF")
+    nt = m.node_tree
+    b = nt.nodes.get("Principled BSDF")
     b.inputs["Base Color"].default_value = (*spec["color"], 1.0)
     b.inputs["Metallic"].default_value = spec["metallic"]
     b.inputs["Roughness"].default_value = spec["roughness"]
+    if not randomize:
+        return m
+
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    noise = nt.nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = 20.0
+    noise.inputs["Detail"].default_value = 6.0
+    nt.links.new(tc.outputs["Object"], noise.inputs["Vector"])
+
+    def math(op, a=None, b_=None, c=None, clamp=False):
+        n = nt.nodes.new("ShaderNodeMath")
+        n.operation = op
+        n.use_clamp = clamp
+        for i, v in enumerate((a, b_, c)):
+            if v is None:
+                continue
+            if isinstance(v, (int, float)):
+                n.inputs[i].default_value = v
+            else:
+                nt.links.new(v, n.inputs[i])
+        return n
+
+    # 밝기: gray × (fac·4c + (1 - 2c))
+    k = math("MULTIPLY_ADD", noise.outputs["Fac"], 0.0, 1.0)          # 계수는 작업마다 설정
+    gray = sum(spec["color"]) / 3.0
+    albedo = math("MULTIPLY", k.outputs[0], gray, clamp=True)
+    nt.links.new(albedo.outputs[0], b.inputs["Base Color"])
+    # 거칠기: fac·2c_r + (r - c_r)
+    rr = math("MULTIPLY_ADD", noise.outputs["Fac"], 0.0, spec["roughness"], clamp=True)
+    nt.links.new(rr.outputs[0], b.inputs["Roughness"])
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.0
+    bump.inputs["Distance"].default_value = 0.002
+    nt.links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    nt.links.new(bump.outputs["Normal"], b.inputs["Normal"])
+    RAND_NODES[name] = dict(bsdf=b, noise=noise, k=k, albedo=albedo, rr=rr, bump=bump, spec=spec)
     return m
+
+
+RAND_NODES: dict = {}
+
+
+def apply_material_params(mp: dict | None) -> None:
+    """작업별 재질 값 적용. mp가 없으면 MATERIALS 기본값 + 텍스처 끔."""
+    mp = mp or {}
+    tex = mp.get("texture", {})
+    for name, n in RAND_NODES.items():
+        spec, o = n["spec"], mp.get("materials", {}).get(name, {})
+        gray = o.get("gray", sum(spec["color"]) / 3.0)
+        c = tex.get("albedo_contrast", 0.0) if o.get("textured", True) else 0.0
+        cr = tex.get("roughness_contrast", 0.0) if o.get("textured", True) else 0.0
+        n["k"].inputs[1].default_value = 4.0 * c
+        n["k"].inputs[2].default_value = 1.0 - 2.0 * c
+        n["albedo"].inputs[1].default_value = gray
+        n["rr"].inputs[1].default_value = 2.0 * cr
+        n["rr"].inputs[2].default_value = o.get("roughness", spec["roughness"]) - cr
+        n["bsdf"].inputs["Metallic"].default_value = o.get("metallic", spec["metallic"])
+        n["noise"].inputs["Scale"].default_value = tex.get("scale", 20.0)
+        n["bump"].inputs["Strength"].default_value = tex.get("bump", 0.0) if o.get("textured", True) else 0.0
 
 
 def build_scene(cfg: dict, model: Path, device: str):
@@ -89,7 +155,7 @@ def build_scene(cfg: dict, model: Path, device: str):
     for o in meshes:
         for slot in o.material_slots:
             if slot.material is not None:
-                slot.material = build_material(slot.material.name)
+                slot.material = build_material(slot.material.name, cfg.get("randomize_materials", False))
     root = bpy.data.objects.new("tango_root", None)
     scene.collection.objects.link(root)
     for o in meshes:
@@ -160,6 +226,8 @@ def main() -> int:
         # SUN 조명은 자기 -Z 방향으로 빛을 보낸다 → +Z가 태양 쪽(위성→태양)을 향하게 회전
         sun.rotation_euler = s.to_track_quat("Z", "Y").to_euler()
         sun.data.energy = job.get("sun_strength", cfg["render"]["sun_strength"])
+        if RAND_NODES:
+            apply_material_params(job.get("material"))
         scene.render.filepath = str(out)
         bpy.ops.render.render(write_still=True)
         if i % 20 == 0 or i == len(jobs) - 1:
