@@ -14,3 +14,4 @@ albumentations==1.4.24
 yacs==0.1.8
 plyfile==1.1.5
 torchinfo==1.8.0
+pytest==9.2.0
