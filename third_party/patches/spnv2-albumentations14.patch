@@ -1,0 +1,90 @@
+diff --git a/core/dataset/transforms/coarsedropout.py b/core/dataset/transforms/coarsedropout.py
+index a01beef..02b4c5d 100644
+--- a/core/dataset/transforms/coarsedropout.py
++++ b/core/dataset/transforms/coarsedropout.py
+@@ -19,6 +19,18 @@ import albumentations as A
+     to force the dropout regions within the prescribed bounding box.
+ """
+ 
++def _cutout(img, holes, fill_value):
++    """ [OrbitLight patch] albumentations>=1.4 removed A.functional.cutout; same behavior as the old one """
++    img = img.copy()
++    # SPNv2 draws fill_value with random.randint(0, 256) (256 included). Old NumPy wrapped 256 -> 0 for uint8;
++    # NumPy 2 raises OverflowError. Keep the old behavior.
++    if img.dtype == np.uint8:
++        fill_value = int(fill_value) % 256
++    for x1, y1, x2, y2 in holes:
++        img[y1:y2, x1:x2] = fill_value
++    return img
++
++
+ class CoarseDropout(A.DualTransform):
+     """CoarseDropout of the rectangular regions in the image.
+ 
+@@ -61,7 +73,7 @@ class CoarseDropout(A.DualTransform):
+         always_apply: bool = False,
+         p: float = 0.5,
+     ):
+-        super(CoarseDropout, self).__init__(always_apply, p)
++        super(CoarseDropout, self).__init__(p=p, always_apply=always_apply)  # [OrbitLight patch] albumentations>=1.4: (p, always_apply) order
+         self.max_holes = max_holes
+         self.min_holes = min_holes if min_holes is not None else max_holes
+         self.min_ratio = min_ratio
+@@ -77,7 +89,7 @@ class CoarseDropout(A.DualTransform):
+         **params
+     ) -> np.ndarray:
+         fill_value = random.randint(0, 256)
+-        return A.functional.cutout(img, holes, fill_value)
++        return _cutout(img, holes, fill_value)
+ 
+     def apply_to_mask(
+         self,
+@@ -86,7 +98,11 @@ class CoarseDropout(A.DualTransform):
+         holes: Iterable[Tuple[int, int, int, int]] = (),
+         **params
+     ) -> np.ndarray:
+-        return A.functional.cutout(img, holes, 0)
++        return _cutout(img, holes, 0)
++
++    def apply_to_bboxes(self, bboxes, **params):
++        # [OrbitLight patch] albumentations>=1.4 no longer passes boxes through by default; dropout keeps boxes as is
++        return bboxes
+ 
+     def get_params_dependent_on_targets(self, params):
+         img  = params["image"]
+diff --git a/core/dataset/transforms/randomsunflare.py b/core/dataset/transforms/randomsunflare.py
+index 810666e..e1ed681 100644
+--- a/core/dataset/transforms/randomsunflare.py
++++ b/core/dataset/transforms/randomsunflare.py
+@@ -50,7 +50,7 @@ class RandomSunFlare(A.DualTransform):
+         always_apply=False,
+         p=0.5,
+     ):
+-        super(RandomSunFlare, self).__init__(always_apply, p)
++        super(RandomSunFlare, self).__init__(p=p, always_apply=always_apply)  # [OrbitLight patch] albumentations>=1.4: (p, always_apply) order
+ 
+         if not 0 <= angle_lower < angle_upper <= 1:
+             raise ValueError(
+@@ -71,15 +71,19 @@ class RandomSunFlare(A.DualTransform):
+     def apply(self, image, src_radius=400, flare_center_x=0.5, flare_center_y=0.5, circles=(), **params):
+         clr = random.choice([0, 255])
+         src_color = (clr, clr, clr)
+-        return A.functional.add_sun_flare(
++        # [OrbitLight patch] albumentations>=1.4: add_sun_flare -> add_sun_flare_overlay(img, (x, y), ...)
++        return A.functional.add_sun_flare_overlay(
+             image,
+-            flare_center_x,
+-            flare_center_y,
++            (flare_center_x, flare_center_y),
+             src_radius,
+             src_color,
+             circles,
+         )
+ 
++    def apply_to_bboxes(self, bboxes, **params):
++        # [OrbitLight patch] albumentations>=1.4 no longer passes boxes through by default; flare keeps boxes as is
++        return bboxes
++
+     @property
+     def targets_as_params(self):
+         return ["image", "bboxes"]

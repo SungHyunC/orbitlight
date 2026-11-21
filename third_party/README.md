@@ -11,12 +11,20 @@
 git clone https://github.com/tpark94/spnv2.git third_party/spnv2
 git -C third_party/spnv2 checkout debee80
 git -C third_party/spnv2 apply ../patches/spnv2-savemat-none.patch
+git -C third_party/spnv2 apply ../patches/spnv2-albumentations14.patch
 ```
 
 ### 패치
 - `patches/spnv2-savemat-none.patch`: 평가 마지막에 이미지별 결과(`per_sample_performance.mat`, `predictions_pose.mat`)를
   저장할 때, heatmap 헤드가 자세 계산을 포기한(reject) 샘플의 `None` 값을 최신 SciPy가 저장하지 못해 멈춘다.
   `None`을 `NaN`으로 바꿔 저장하도록 고쳤다. 평균 점수 계산에는 영향이 없다 (패치 전후 sunlamp 결과 동일).
+- `patches/spnv2-albumentations14.patch`: **학습**할 때만 필요. SPNv2의 사용자 정의 증강 두 개(`CoarseDropout`, `RandomSunFlare`)가
+  albumentations 1.4(고정 버전 1.4.24)와 안 맞아서 멈춘다. ① 부모 클래스 인자 순서가 `(p, always_apply)`로 바뀜 → 이름으로 전달,
+  ② `A.functional.cutout` 삭제 → 같은 동작의 작은 함수로 대체, `add_sun_flare` → `add_sun_flare_overlay`(같은 기능, 인자 묶음만 다름),
+  ③ 상자(bbox)를 그대로 통과시키는 `apply_to_bboxes` 추가 (1.4는 기본 통과를 안 함), ④ 구멍 채움 값이 `randint(0, 256)`이라
+  256이 나오면 NumPy 2에서 오류 → 예전 NumPy처럼 256을 0으로 처리. 증강 동작 자체는 바꾸지 않았다.
+- 주의: SPNv2 `per_sample_performance.mat`의 `heat_*` 배열은 자세 계산 거부 이미지를 **빼고** 저장된다 (`h_reject`만 전체 길이).
+  이미지별로 맞춰 쓰려면 `src/orbitlight/eval/spnv2_results.py::load_per_sample`을 쓴다.
 
 ## SPNv2 공개 학습 가중치
 
