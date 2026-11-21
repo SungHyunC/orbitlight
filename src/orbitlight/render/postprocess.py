@@ -27,8 +27,9 @@ def distortion_maps(K_flat: tuple, dist: tuple, Nu: int, Nv: int) -> tuple[np.nd
 
 def to_speedplus_image(raw_rgb16: np.ndarray, camera: dict, rng: np.random.Generator,
                        noise_std: float = 3.0, noise_offset: float = 2.0) -> np.ndarray:
-    """16-bit RGB(OpenCV BGR 순서) → 왜곡 적용 흑백 uint8."""
-    gray = cv2.cvtColor(raw_rgb16.astype(np.float32) / 65535.0, cv2.COLOR_BGR2GRAY) * 255.0
+    """RGB PNG(OpenCV BGR 순서, 8/16-bit) → 왜곡 적용 흑백 uint8."""
+    full = 65535.0 if raw_rgb16.dtype == np.uint16 else 255.0   # 16-bit 또는 8-bit PNG
+    gray = cv2.cvtColor(raw_rgb16.astype(np.float32) / full, cv2.COLOR_BGR2GRAY) * 255.0
     K = tuple(np.ravel(camera["cameraMatrix"]))
     mx, my = distortion_maps(K, tuple(camera["distCoeffs"]), camera["Nu"], camera["Nv"])
     img = cv2.remap(gray, mx, my, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
@@ -65,9 +66,14 @@ def project(points_body: np.ndarray, q, r, camera: dict) -> np.ndarray:
 
 
 def silhouette_mask(V: np.ndarray, F: np.ndarray, q, r, camera: dict) -> np.ndarray:
-    """모델 실루엣 마스크 (uint8 0/255). 면을 투영해 채운다 (가림은 실루엣 합집합이라 무관)."""
+    """모델 실루엣 마스크 (uint8 0/255). 면을 투영해 채운다 (가림은 실루엣 합집합이라 무관).
+
+    삼각형을 하나씩 채운다. cv2.fillPoly에 여러 삼각형을 한 번에 넘기면 겹친 부분이 even-odd 규칙으로
+    지워져 구멍이 생긴다 (LOG render-004: 면적의 약 45%만 덮였음).
+    """
     p = project(V, q, r, camera)
     tris = np.rint(p[F]).astype(np.int32)
     m = np.zeros((camera["Nv"], camera["Nu"]), np.uint8)
-    cv2.fillPoly(m, list(tris.reshape(-1, 3, 1, 2)), 255)
+    for tri in tris:
+        cv2.fillConvexPoly(m, tri, 255)
     return m

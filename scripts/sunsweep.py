@@ -46,36 +46,55 @@ def cmd_jobs(a) -> None:
     rng = np.random.default_rng(a.seed)
     picks = sorted(rng.choice(len(labels), a.n_poses, replace=False).tolist())
 
-    conds = []
-    for p in a.phases:
-        for az in ([0.0] if p == 0 else a.azimuths):  # 위상각 0°는 방위각과 무관
-            conds.append((p, az))
-
-    jobs = []
-    for k, li in enumerate(picks):
-        lab = labels[li]
-        q, r = lab["q_vbs2tango_true"], lab["r_Vo2To_vbs_true"]
-        M = blender_object_matrix(q, r)
-        for p, az in conds:
-            s_cam = sun_direction_cam(r, p, az)
-            assert abs(phase_angle_deg(r, s_cam) - p) < 1e-6
-            jobs.append(dict(
-                name=f"p{k:03d}_ph{int(p):03d}_az{int(az):03d}",
-                pose_id=k, source_image=lab["filename"], q=q, r=r,
-                phase_deg=p, azimuth_deg=az,
-                sun_dir_cam=s_cam.tolist(), sun_dir_world=(C_CV2BL @ s_cam).tolist(),
-                object_matrix=M.tolist(),
-            ))
+    jobs, conds = [], []
+    if a.random_per_pose > 0:
+        # 학습용: 자세마다 태양 방향을 무작위로 (위상각 균등 0~phase_max, 방위각 균등, 태양 세기 범위 균등)
+        for k, li in enumerate(picks):
+            lab = labels[li]
+            q, r = lab["q_vbs2tango_true"], lab["r_Vo2To_vbs_true"]
+            M = blender_object_matrix(q, r)
+            for j in range(a.random_per_pose):
+                p = float(rng.uniform(0.0, a.phase_max))
+                az = float(rng.uniform(0.0, 360.0))
+                strength = float(rng.uniform(*a.strength_range))
+                s_cam = sun_direction_cam(r, p, az)
+                jobs.append(dict(
+                    name=f"p{k:04d}_s{j}", pose_id=k, source_image=lab["filename"], q=q, r=r,
+                    phase_deg=p, azimuth_deg=az, sun_strength=strength,
+                    sun_dir_cam=s_cam.tolist(), sun_dir_world=(C_CV2BL @ s_cam).tolist(),
+                    object_matrix=M.tolist(),
+                ))
+        desc = f"{a.n_poses} poses × {a.random_per_pose} random sun directions"
+    else:
+        for p in a.phases:
+            for az in ([0.0] if p == 0 else a.azimuths):  # 위상각 0°는 방위각과 무관
+                conds.append((p, az))
+        for k, li in enumerate(picks):
+            lab = labels[li]
+            q, r = lab["q_vbs2tango_true"], lab["r_Vo2To_vbs_true"]
+            M = blender_object_matrix(q, r)
+            for p, az in conds:
+                s_cam = sun_direction_cam(r, p, az)
+                assert abs(phase_angle_deg(r, s_cam) - p) < 1e-6
+                jobs.append(dict(
+                    name=f"p{k:03d}_ph{int(p):03d}_az{int(az):03d}",
+                    pose_id=k, source_image=lab["filename"], q=q, r=r,
+                    phase_deg=p, azimuth_deg=az,
+                    sun_dir_cam=s_cam.tolist(), sun_dir_world=(C_CV2BL @ s_cam).tolist(),
+                    object_matrix=M.tolist(),
+                ))
+        desc = f"{a.n_poses} poses × {len(conds)} sun conditions"
     cfg = dict(
         created=time.strftime("%Y-%m-%d %H:%M:%S"),
         camera=camera, model=str(MODEL.relative_to(ROOT)), pose_source=a.pose_source, seed=a.seed,
-        render=dict(sun_strength=a.sun_strength, samples=a.samples, denoise=True, max_bounces=6, seed=0, exposure=0.0),
+        render=dict(sun_strength=a.sun_strength, samples=a.samples, denoise=True, max_bounces=6, seed=0, exposure=0.0,
+                    color_depth=a.color_depth),
         post=dict(noise_std=a.noise_std, noise_offset=a.noise_offset, jpg_quality=95),
         conditions=[dict(phase_deg=p, azimuth_deg=az) for p, az in conds],
         jobs=jobs,
     )
     (run / "jobs.json").write_text(json.dumps(cfg, indent=1))
-    print(f"{run / 'jobs.json'}: {a.n_poses} poses × {len(conds)} sun conditions = {len(jobs)} images")
+    print(f"{run / 'jobs.json'}: {desc} = {len(jobs)} images")
 
 
 def cmd_render(a) -> None:
@@ -114,9 +133,12 @@ def cmd_post(a) -> None:
         if not raw.exists():
             continue
         fn = f"{j['name']}.jpg"
-        img = to_speedplus_image(cv2.imread(str(raw), cv2.IMREAD_UNCHANGED), camera, rng,
-                                 post["noise_std"], post["noise_offset"])
-        cv2.imwrite(str(dom / "images" / fn), img, [cv2.IMWRITE_JPEG_QUALITY, post["jpg_quality"]])
+        if a.masks_only:   # 이미지는 그대로 두고 마스크와 밝기 통계만 다시 계산
+            img = cv2.imread(str(dom / "images" / fn), cv2.IMREAD_GRAYSCALE)
+        else:
+            img = to_speedplus_image(cv2.imread(str(raw), cv2.IMREAD_UNCHANGED), camera, rng,
+                                     post["noise_std"], post["noise_offset"])
+            cv2.imwrite(str(dom / "images" / fn), img, [cv2.IMWRITE_JPEG_QUALITY, post["jpg_quality"]])
         # 마스크는 자세에만 의존 → 자세당 한 번 계산해서 재사용
         if j["pose_id"] not in masks_done:
             masks_done[j["pose_id"]] = silhouette_mask(V, F, j["q"], j["r"], camera)
@@ -131,7 +153,8 @@ def cmd_post(a) -> None:
                          fg_p95=float(np.percentile(fg, 95)) if fg.size else 0.0,
                          fg_sat_frac=float((fg >= 250).mean()) if fg.size else 0.0,
                          fg_dark_frac=float((fg <= 10).mean()) if fg.size else 0.0))
-    (dom / "test.json").write_text(json.dumps(labels, indent=1))
+    if not a.masks_only:   # 라벨은 그대로이므로 다시 쓰지 않음 (SPNv2 전처리를 불필요하게 다시 돌리지 않게)
+        (dom / "test.json").write_text(json.dumps(labels, indent=1))
     with open(dom / "meta.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
         w.writeheader()
@@ -153,6 +176,10 @@ def main() -> int:
     j.add_argument("--noise-std", type=float, default=3.0)
     j.add_argument("--noise-offset", type=float, default=2.0)
     j.add_argument("--seed", type=int, default=0)
+    j.add_argument("--random-per-pose", type=int, default=0, help=">0이면 격자 대신 자세마다 무작위 태양 방향 N개 (학습용)")
+    j.add_argument("--phase-max", type=float, default=170.0)
+    j.add_argument("--strength-range", type=floats, default=floats("3,5"))
+    j.add_argument("--color-depth", default="16", choices=["8", "16"], help="raw PNG 비트 수 (8이면 디스크 절반)")
     r = sub.add_parser("render")
     r.add_argument("--run", required=True)
     r.add_argument("--device", default="OPTIX")
@@ -160,6 +187,7 @@ def main() -> int:
     r.add_argument("--count", type=int, default=-1)
     o = sub.add_parser("post")
     o.add_argument("--run", required=True)
+    o.add_argument("--masks-only", action="store_true", help="이미지는 다시 만들지 않고 마스크·meta.csv만 갱신")
     a = p.parse_args()
     {"jobs": cmd_jobs, "render": cmd_render, "post": cmd_post}[a.cmd](a)
     return 0

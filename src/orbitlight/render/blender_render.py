@@ -136,7 +136,7 @@ def build_scene(cfg: dict, model: Path, device: str):
     scene.view_settings.exposure = r.get("exposure", 0.0)
     scene.render.image_settings.file_format = "PNG"
     scene.render.image_settings.color_mode = "RGB"
-    scene.render.image_settings.color_depth = "16"
+    scene.render.image_settings.color_depth = str(r.get("color_depth", "16"))
     return scene, root, sun
 
 
@@ -159,6 +159,7 @@ def main() -> int:
         s = Vector(job["sun_dir_world"]).normalized()
         # SUN 조명은 자기 -Z 방향으로 빛을 보낸다 → +Z가 태양 쪽(위성→태양)을 향하게 회전
         sun.rotation_euler = s.to_track_quat("Z", "Y").to_euler()
+        sun.data.energy = job.get("sun_strength", cfg["render"]["sun_strength"])
         scene.render.filepath = str(out)
         bpy.ops.render.render(write_still=True)
         if i % 20 == 0 or i == len(jobs) - 1:
