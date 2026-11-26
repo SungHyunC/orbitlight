@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitLight</title>
+<meta name="description" content="궤도의 햇빛 때문에 위성 자세 추정 AI가 언제 틀리는지 지도로 그리고, 틀리는 순간을 스스로 알리게 하고, 궤도 한 바퀴에서 위험한 시간을 미리 찾는다.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">OrbitLight v0.2 · 우주 근접 운용 · 위성 자세 추정</p>
+    <h1>햇빛이 위성 뒤로 돌아가면,<br>위성을 보는 AI는 얼마나 틀릴까</h1>
+    <p class="lede">고장 난 위성을 고치거나 우주 쓰레기를 붙잡으려면, 다가가는 위성이 카메라 사진만으로 상대 위성이 어느 쪽을 향하는지(자세) 알아야 합니다.
+      우주에는 공기가 없어 그림자가 새까맣고, 태양 위치는 궤도를 도는 동안 계속 바뀝니다.
+      OrbitLight는 공개 자세 추정 모델 SPNv2가 <b>어떤 햇빛에서 틀리는지 지도로 그리고</b>, <b>틀리는 순간을 스스로 알리게 하고</b>, <b>궤도 한 바퀴에서 위험한 시간을 미리 찾습니다</b>.</p>
+    <div class="stats" id="stats"></div>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="섹션">
+  <div class="wrap">
+    <button role="tab" aria-selected="true" data-tab="sweep">① 태양을 돌려 보기</button>
+    <button role="tab" aria-selected="false" data-tab="hil">② 실제 조명에서 경고</button>
+    <button role="tab" aria-selected="false" data-tab="orbit">③ 궤도 한 바퀴</button>
+    <button role="tab" aria-selected="false" data-tab="method">방법과 한계</button>
+  </div>
+</nav>
+
+<main class="wrap">
+  <section id="tab-sweep" class="panel" role="tabpanel">
+    <div class="intro">
+      <h2>태양만 바꾸면 AI가 언제 틀리나</h2>
+      <p>위성 자세는 그대로 두고 <b>태양 방향만</b> 바꿔 렌더링한 6,500장(자세 100개 × 태양 65곳)으로 실패 지도를 그렸습니다.
+        오른쪽 원판을 눌러 태양을 옮겨 보세요. 가운데는 카메라 바로 뒤의 태양(정면 조명), 바깥쪽일수록 위성 뒤의 태양(역광)입니다.
+        칸 색은 자세 100개의 실패율, 점은 지금 고른 자세의 결과입니다.</p>
+    </div>
+    <div class="pose-chips" id="pose-chips" aria-label="위성 자세 고르기"></div>
+    <div class="explorer">
+      <figure class="viewer">
+        <canvas id="sweep-canvas" width="768" height="480" aria-label="렌더 이미지와 AI가 추정한 자세"></canvas>
+        <figcaption id="sweep-readout" class="readout"></figcaption>
+        <div class="controls">
+          <label><input type="checkbox" id="show-true" checked> 정답 자세(흰 점선)</label>
+          <button id="sweep-play" class="btn">▶ 정면 → 역광으로 돌리기</button>
+        </div>
+      </figure>
+      <div class="side">
+        <svg id="polar" viewBox="-170 -170 340 340" role="img" aria-label="태양 방향별 실패율 지도"></svg>
+        <div class="legend" id="polar-legend"></div>
+        <div class="phase-bars" id="phase-bars"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-hil" class="panel" role="tabpanel" hidden>
+    <div class="intro">
+      <h2>실물 조명 사진에서도 "지금 틀렸다"를 알아챌까</h2>
+      <p>SPNv2가 낸 두 답(키포인트로 계산한 자세와 직접 맞힌 자세)이 얼마나 어긋나는지, 키포인트를 얼마나 확신하는지, 위성이 얼마나 어두운지를 묶어
+        <b>경고 점수</b>를 만들었습니다. 점수와 경고 기준은 <b>렌더 이미지에서만</b> 정했고, 아래는 실험실에서 실물 모형을 실제 조명으로 찍은 사진(SPEED+ lightbox·sunlamp)에서 평가한 결과입니다.</p>
+    </div>
+    <div class="hil-stats" id="hil-stats"></div>
+    <div class="two">
+      <figure class="card">
+        <svg id="rc-chart" viewBox="0 0 520 320" role="img" aria-label="경고 점수로 걸러낼 때 남은 실패율"></svg>
+        <figcaption>확신 높은 사진부터 받아들일 때 남는 실패율. 점선은 경고 없이 다 받아들인 경우.</figcaption>
+      </figure>
+      <div class="card" id="auroc-card"></div>
+    </div>
+    <h3>예시</h3>
+    <div class="gallery" id="hil-gallery"></div>
+  </section>
+
+  <section id="tab-orbit" class="panel" role="tabpanel" hidden>
+    <div class="intro">
+      <h2>궤도 한 바퀴 동안 언제 위험한가</h2>
+      <p>고도 500 km 원궤도를 도는 목표 위성 근처에 추적 위성이 멈춰 카메라로 바라봅니다. 태양은 궤도를 도는 동안 위성 주위를 한 바퀴 돌고,
+        지구 그림자(식)에 들어가면 아무것도 보이지 않습니다. <b>어디에 멈춰 서느냐</b>에 따라 역광 시간이 달라집니다.</p>
+    </div>
+    <div class="plan" id="plan"></div>
+    <div class="pass-chips" id="pass-chips"></div>
+    <div class="orbit-grid">
+      <svg id="orbit-diagram" viewBox="-160 -160 320 320" role="img" aria-label="궤도와 태양, 지구 그림자"></svg>
+      <figure class="viewer">
+        <canvas id="orbit-canvas" width="768" height="480" aria-label="추적 위성 카메라 화면"></canvas>
+        <figcaption id="orbit-readout" class="readout"></figcaption>
+      </figure>
+    </div>
+    <div class="controls">
+      <button id="orbit-play" class="btn">▶ 재생</button>
+      <input type="range" id="orbit-slider" min="0" max="0" value="0" aria-label="궤도 시간">
+      <span id="orbit-time" class="mono"></span>
+    </div>
+    <svg id="timeline" viewBox="0 0 1000 250" role="img" aria-label="시간에 따른 태양 각도, 예측 위험, 실제 오차"></svg>
+    <p class="note" id="orbit-note"></p>
+  </section>
+
+  <section id="tab-method" class="panel" role="tabpanel" hidden>
+    <div class="intro">
+      <h2>방법과 한계</h2>
+    </div>
+    <div class="prose">
+      <h3>무엇을 했나</h3>
+      <ol>
+        <li><b>문제 재현</b>: SPNv2 공개 가중치를 SPEED+로 평가해 논문 수치를 재현했습니다. 합성 이미지에서 실물 조명(HIL)으로 가면 자세 점수가 5~8배 나빠집니다.</li>
+        <li><b>실패 지도</b>: Blender로 태양 방향만 바꾼 6,500장을 렌더링했습니다. 위상각(위성에서 본 카메라와 태양 사이 각) 0°→160°에서 실패율이 1%→71%로 오르고, 실패의 상당수는 위성을 거꾸로 보는 대칭 뒤집힘입니다.</li>
+        <li><b>재학습 실험</b>: 역광 렌더를 섞어 미세조정하면 렌더 안에서는 좋아지지만 실물 조명에서는 나빠졌고, 재질·텍스처 무작위화로 손실을 대부분 되찾았습니다.</li>
+        <li><b>자가 경고 (v0.2)</b>: 재학습 없이 모델이 이미 내는 신호로 실패를 미리 알립니다. 기준은 렌더에서만 정하고 실물 조명 사진으로 평가합니다.</li>
+        <li><b>궤도 시나리오 (v0.2)</b>: 원궤도의 태양·지구 그림자를 계산해 정지 위치별 위험 시간을 실패 지도로 예측하고, 그 장면을 실제로 렌더링해 확인합니다.</li>
+      </ol>
+      <h3>한계</h3>
+      <ul>
+        <li>렌더 배경은 검은 우주뿐이고 지구 반사광과 카메라 시야 안의 태양(눈부심)은 없습니다.</li>
+        <li>궤도 장면의 목표 위성은 자세를 궤도 기준으로 유지한다고 가정했습니다. 굴러가는 우주 쓰레기는 다릅니다.</li>
+        <li>실물 조명 평가는 실험실 사진(SPEED+ lightbox·sunlamp)입니다. 실제 궤도 사진은 아닙니다.</li>
+      </ul>
+      <h3>출처</h3>
+      <ul class="credits">
+        <li>SPEED+ 데이터셋: Park et al., Stanford SLAB, CC BY-NC-SA 4.0 (비상업적 사용)</li>
+        <li>SPNv2: Park &amp; D'Amico, MIT License</li>
+        <li>Tango 3D 모형: SPIN 시뮬레이터(vpulab), GPL-3.0. 렌더 이미지는 이 모형으로 만들었습니다.</li>
+        <li>코드: <a href="https://github.com/SungHyunC/orbitlight">github.com/SungHyunC/orbitlight</a></li>
+      </ul>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap foot">OrbitLight · SPEED+ (CC BY-NC-SA 4.0) · SPNv2 (MIT) · SPIN Tango 모형 (GPL-3.0)</footer>
+
+<script src="data/sweep.js"></script>
+<script src="data/hil.js"></script>
+<script src="data/orbit.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -200,13 +200,6 @@ def main() -> int:
         data[name], tr = load_domain(ed, idir, labels, tr)
         d = data[name]
         print(f"[load] {name}: {len(d['fail'])} images, reject {d['reject'].sum()}, fail {d['fail'].mean():.3f}", flush=True)
-        with open(out / f"features_{name}.csv", "w", newline="") as fh:
-            cols = ["filename", "reject", "fail", "heat_eR", "effi_eR", "head_dR", "head_dT"] + FEATURES[2:]
-            w = csv.writer(fh)
-            w.writerow(cols)
-            for i in range(len(d["fail"])):
-                w.writerow([d[c][i] if c == "filename" else (int(d[c][i]) if d[c].dtype == bool else
-                            ("" if not np.isfinite(d[c][i]) else round(float(d[c][i]), 5))) for c in cols])
     assert "renders" in data, "점수 모델을 정할 렌더 평가 결과가 없다"
     has_peak = bool(np.isfinite(data["renders"]["peak_mean"]).any())
     feats = FEATURES if has_peak else [f for f in FEATURES if not f.startswith("peak")]
@@ -247,10 +240,21 @@ def main() -> int:
                 kept_fail_rate=float(d["fail"][kept].mean()) if kept.any() else None)
             if sname == "전체 신호" or sname == "두 헤드 불일치":
                 curves[(name, sname)] = risk_coverage(s_all, d["fail"], d["reject"])
+            if sname == "전체 신호":
+                d["score"], d["warn"] = s_all, warn
         summary["domains"][name] = row
         s0 = row["sets"]["전체 신호"]
         print(f"[{name}] 실패율 {row['fail_rate']:.3f} → 경고 {s0['warn_rate']:.3f}, 경고 뒤 남은 실패율 "
               f"{s0['kept_fail_rate']:.3f}, 실패 중 경고 {s0['recall']:.3f}, AUROC {s0['auroc']:.3f}", flush=True)
+    # 이미지별 신호·점수·경고 (웹 데모와 궤도 분석이 읽는다)
+    cols = ["filename", "reject", "fail", "warn", "score", "heat_eR", "effi_eR", "head_dR", "head_dT"] + FEATURES[2:]
+    for name, d in data.items():
+        with open(out / f"features_{name}.csv", "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(cols)
+            for i in range(len(d["fail"])):
+                w.writerow([d[c][i] if c == "filename" else (int(d[c][i]) if d[c].dtype == bool else
+                            ("" if not np.isfinite(d[c][i]) else round(float(d[c][i]), 5))) for c in cols])
     (out / "summary.json").write_text(json.dumps(summary, indent=1, ensure_ascii=False))
     plot(summary, curves, ROOT / "docs" / "figures" / f"self_check_{wd}.png")
     print(f"-> {out / 'summary.json'}")
