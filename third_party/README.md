@@ -12,6 +12,7 @@ git clone https://github.com/tpark94/spnv2.git third_party/spnv2
 git -C third_party/spnv2 checkout debee80
 git -C third_party/spnv2 apply ../patches/spnv2-savemat-none.patch
 git -C third_party/spnv2 apply ../patches/spnv2-albumentations14.patch
+git -C third_party/spnv2 apply ../patches/spnv2-heatmap-peaks.patch
 ```
 
 ### 패치
@@ -23,6 +24,10 @@ git -C third_party/spnv2 apply ../patches/spnv2-albumentations14.patch
   ② `A.functional.cutout` 삭제 → 같은 동작의 작은 함수로 대체, `add_sun_flare` → `add_sun_flare_overlay`(같은 기능, 인자 묶음만 다름),
   ③ 상자(bbox)를 그대로 통과시키는 `apply_to_bboxes` 추가 (1.4는 기본 통과를 안 함), ④ 구멍 채움 값이 `randint(0, 256)`이라
   256이 나오면 NumPy 2에서 오류 → 예전 NumPy처럼 256을 0으로 처리. 증강 동작 자체는 바꾸지 않았다.
+- `patches/spnv2-heatmap-peaks.patch` (v0.2): 평가할 때 이미지마다 키포인트 11개 히트맵의 최댓값을
+  `predictions_pose.mat`의 `heat_peak`(N×11)로 저장한다. 실패 자가 경고(`scripts/self_check.py`)의 "키포인트 확신도" 신호다.
+  원래 코드는 전체 히트맵(이미지당 약 1 MB)을 메모리에 모으기만 하고 저장하지 않았는데, 그 자리에서 최댓값만 모으므로
+  평가 메모리도 줄어든다. 자세 계산과 점수는 바뀌지 않는다.
 - 주의: SPNv2 `per_sample_performance.mat`의 `heat_*` 배열은 자세 계산 거부 이미지를 **빼고** 저장된다 (`h_reject`만 전체 길이).
   이미지별로 맞춰 쓰려면 `src/orbitlight/eval/spnv2_results.py::load_per_sample`을 쓴다.
 

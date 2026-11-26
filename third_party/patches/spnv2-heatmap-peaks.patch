@@ -1,0 +1,24 @@
+diff --git a/core/engine/inference.py b/core/engine/inference.py
+index 11d683d..9a45b82 100644
+--- a/core/engine/inference.py
++++ b/core/engine/inference.py
+@@ -145,7 +145,9 @@ def do_valid(epoch, cfg, model, data_loader, camera, keypts_true_3D,
+                         q_pr = t_pr = None
+ 
+                     # Outputs
+-                    heatmaps.append(outputs[i].squeeze(0).cpu().numpy())
++                    # [OrbitLight patch] keep only each keypoint's heatmap peak (self-check feature);
++                    # full heatmaps (~1 MB/image) were collected here but never saved
++                    heatmaps.append(outputs[i].squeeze(0).flatten(1).max(-1).values.cpu().numpy())
+                     h_reject.append(reject)
+                     q_hmap.append(q_pr)
+                     t_hmap.append(t_pr)
+@@ -279,7 +281,7 @@ def do_valid(epoch, cfg, model, data_loader, camera, keypts_true_3D,
+         # savemat(predfn, {'hmap': heatmaps, 'hmap_q': q_hmap, 'hmap_t': t_hmap, 'eff_R': R_reg, 'eff_t': t_reg}, appendmat=False)
+ 
+         predfn = os.path.join(log_dir, 'predictions_pose.mat')
+-        savemat(predfn, _fill_none({'heat_q': q_hmap, 'heat_t': t_hmap, 'effi_R': R_reg, 'effi_t': t_reg, 'bbox': bbox_reg, 'reject': h_reject}), appendmat=False)
++        savemat(predfn, _fill_none({'heat_q': q_hmap, 'heat_t': t_hmap, 'effi_R': R_reg, 'effi_t': t_reg, 'bbox': bbox_reg, 'reject': h_reject, 'heat_peak': heatmaps}), appendmat=False)
+         logger.info(f'Pose predictions saved to {predfn}')
+ 
+     return metrics['final_pose'].avg
