@@ -215,6 +215,18 @@ def sh_gpu(cmd: str) -> int:
     return rc
 
 
+@app.function(volumes={VOL: vol}, gpu=["L4", "A10", "L40S"], cpu=8, memory=24576, timeout=8 * 3600)
+def sh_gpu_big(cmd: str) -> int:
+    """미세조정용: 데이터 증강이 CPU에서 병목이라 코어를 늘린 GPU 컨테이너 (A10·4코어에서 1에폭 약 30분)."""
+    w = _workdir()
+    vol.reload()
+    _run("nvidia-smi --query-gpu=name --format=csv,noheader; nproc", w)
+    with _Autocommit():
+        rc = _run(cmd, w)
+    vol.commit()
+    return rc
+
+
 @app.local_entrypoint()
 def run_sh(cmd: str, gpu: str = "") -> None:
     """GPU 없이: --gpu ""(기본). GPU: --gpu L4 | A10 | L40S | "L4,A10,L40S"(앞에서부터 남는 것) ..."""
@@ -230,11 +242,11 @@ def run_sh(cmd: str, gpu: str = "") -> None:
 
 @app.function(cpu=0.25, memory=512, timeout=12 * 3600)
 def chain(steps: list[list[str]]) -> list[int]:
-    """[["cpu"|"gpu", 명령], ...]을 Modal 안에서 차례로 돌린다. 실패하면 멈춘다.
+    """[["cpu"|"gpu"|"gpu8", 명령], ...]을 Modal 안에서 차례로 돌린다. 실패하면 멈춘다.
     `modal run --detach ...::run_chain`으로 띄우면 이 컴퓨터의 연결이 끊겨도 끝까지 간다."""
     out = []
     for kind, cmd in steps:
-        rc = (sh_gpu if kind == "gpu" else sh_cpu).remote(cmd)
+        rc = {"gpu": sh_gpu, "gpu8": sh_gpu_big}.get(kind, sh_cpu).remote(cmd)
         out.append(rc)
         print(f"[chain] {kind} rc={rc}: {cmd[:100]}", flush=True)
         if rc != 0:

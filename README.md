@@ -5,10 +5,10 @@
 A lighting simulator for orbital scenes that maps **under which sun conditions a spacecraft pose estimation network fails**
 (a "failure map"), and tests whether targeted synthetic data can reduce those failures.
 
-> Status: v0.1 — Phase 1 (reproduce the problem), Phase 2 (sun-angle rendering) and Phase 3 (failure map + retraining experiment) done.
-> The first retraining run was **mixed**: back-lit failures halved inside our own renderer, but performance on real-lighting
-> hardware-in-the-loop images got worse (Phase 3b). Randomizing materials and textures in the renders removed most of that
-> loss while keeping the renderer-side gain (Phase 3c).
+> Status: **v0.2** — on top of v0.1 (reproduce the problem, sun-angle rendering, failure map + retraining experiments) it adds
+> **(1) a self-check that warns when the estimate is likely wrong, (2) one-orbit scenarios, (3) a web demo and a demo video**.
+> v0.1 ended with "a gain on synthetic data is not a gain on real data"; v0.2 follows that rule: thresholds are set on renders only and
+> evaluated on real-lighting images. Every GPU step was re-run on Modal and reproduces the v0.1 numbers (`cloud/`).
 
 ## TL;DR
 
@@ -19,6 +19,9 @@ A lighting simulator for orbital scenes that maps **under which sun conditions a
 | Retraining | Mixing in back-lit renders cuts failures on the same-renderer sun-angle test from 26% to 14%, but raises HIL failures from 9% to 11% (lightbox) and 16% to 21% (sunlamp) |
 | Domain randomization | Randomizing materials/textures in the same renders keeps the sun-angle gain (26% → 14%) and brings sunlamp failures back to the control level (15.1% vs 15.7%); lightbox is still slightly worse (9.9% vs 8.9%) |
 | Lesson | An improvement on a synthetic failure map does not imply a real-world improvement. **Claims must be checked on real-lighting data** |
+| **v0.2 (1) Self-check** | Disagreement between SPNv2's two heads plus keypoint confidence flags "this estimate is probably wrong". Fitted on renders only; on real-lighting images, dropping the warned images cuts failures **13.0% → 3.2% (sunlamp)** and **8.1% → 2.2% (lightbox)**, AUROC 0.906 / 0.924 |
+| **v0.2 (2) One orbit** | In a 500 km circular orbit, where the chaser waits changes the risky time (beta = 30°: H-bar on the sun side 0 min vs the far side 61 min, predicted from the map). Rendering those passes: 2.9% vs 11.1% failures |
+| **v0.2 (3) Web demo** | Open `site/index.html` (no server, no network): move the sun, see warnings on real-lighting photos, play an orbit |
 
 ## Problem
 
@@ -203,6 +206,63 @@ python scripts/compare_finetune.py --weights offline ftctrl_v01:final ft_v01:fin
 ```
 
 The full experiment log is in [`experiments/LOG.md`](experiments/LOG.md) (Korean).
+
+## v0.2 — self-check, one orbit, web demo
+
+### Reproduction on Modal
+
+All GPU steps were re-run on Modal (`cloud/modal_app.py`, command order in `cloud/experiments.sh`). Containers lack the OptiX denoiser
+weights (`/usr/share/nvidia/nvoptix.bin`), so renders are denoised with OIDN on the GPU (`blender_render.py --denoiser`).
+SPNv2 offline E_pose is 0.141 / 0.227 on lightbox / sunlamp (same as v0.1), and the sun-sweep failure rates at 0°, 60°, 100°, 140°, 160°
+are 1.0, 11.0, 24.0, 47.6, 69.9% (v0.1: 1.0, 11.5, 23.0, 47.6, 70.6%; every v0.1 value is inside the v0.2 95% interval).
+
+### (1) Self-check: knowing when it is wrong
+
+`scripts/self_check.py`, no retraining. Signals: rotation and translation disagreement between the heatmap+PnP head and the
+EfficientPose head, the 11 keypoint heatmap peaks (saved by `third_party/patches/spnv2-heatmap-peaks.patch`), and, for comparison,
+image darkness inside the predicted box. A logistic regression and the warning threshold (catch 90% of render failures) are fitted on
+the sun-sweep renders only; HIL is used only for evaluation. Failure = rotation error > 10° or rejected, as in v0.1.
+
+![self-check](docs/figures/self_check_offline.png)
+
+| AUROC (answered images) | Renders (fit) | Synthetic | lightbox | sunlamp |
+|---|---|---|---|---|
+| **Model-internal** (head disagreement + keypoint confidence) | 0.937 | 0.944 | **0.924** | **0.906** |
+| All signals (+ image darkness) | 0.943 | 0.946 | 0.916 | 0.865 |
+| Head disagreement only | 0.890 | 0.881 | 0.887 | 0.857 |
+| Keypoint confidence only | 0.933 | 0.950 | 0.913 | 0.893 |
+| Darkness only | 0.819 | 0.712 | 0.733 | **0.500** |
+
+Image darkness works on renders but not on real lighting (sunlamp 0.50 = chance), the v0.1 lesson again. The default score is the
+model-internal set: choosing between {all, model-internal} by AUROC on one HIL domain and testing on the other picks model-internal in
+both directions. With it, warned images are 16.4% (lightbox) and 25.2% (sunlamp); 77.4% and 81.5% of failures are caught; the failure
+rate of the remaining images is **2.2%** and **3.2%** (from 8.1% and 13.0%).
+
+### (2) One orbit: when is it risky?
+
+`src/orbitlight/orbit/scenario.py`, `scripts/orbit_pass.py`: a 500 km circular orbit (94.6 min) with the sun direction and the Earth's
+shadow (cylinder model). The target holds an LVLH-fixed attitude; the chaser waits at a hold point and looks at it. Beta is the angle
+between the orbit plane and the sun.
+
+![orbit plan](docs/figures/orbit_plan.png)
+
+Rendering beta = 30° passes (target attitude of SPEED+ `img037540`, robust when front-lit and weak when back-lit; 6.6 m; 244 lit frames each):
+
+| Hold | Actual failures | Map prediction | Failures caught by the self-check | Failures among unwarned frames |
+|---|---|---|---|---|
+| H-bar, sun side | **2.9%** | 11.0% | 0% (0.4% warned) | 2.9% |
+| H-bar, far side | **11.1%** | 33.1% | 92.6% | 1.3% |
+| R-bar, looking up | 22.5% | 34.0% | **100%** | **0%** |
+| V-bar, behind | **53.7%** | 25.2% | **38.9%** | 41.7% |
+
+The sun-side vs far-side difference holds in the renders. Limits: the failure map averages 100 poses, so a given pose can be much
+worse (V-bar: right *when* the map said, after leaving the Earth's shadow, but 54% instead of 25%), and the self-check misses
+"confidently wrong" estimates where both heads agree on a ~30° error. Earth albedo and the sun inside the camera's field of view are not rendered.
+
+### (3) Web demo and demo video
+
+Open `site/index.html` (data in `site/data/*.js`, built by `scripts/build_site.py`; image licenses in `site/img/README.md`).
+The narrated Korean demo video is made by `python3 demo/make.py` (macOS voice, Playwright recording, ffmpeg subtitles).
 
 ## Setup
 

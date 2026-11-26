@@ -181,6 +181,7 @@ def cmd_analyze(a) -> None:
     ps = load_per_sample(ev / "per_sample_performance.mat")
     labels = json.loads((run / "sunsweep" / "test.json").read_text())
     by_name = {j["name"]: j for j in cfg["jobs"]}
+    table = load_map(a.map)   # 다시 만든 실패 지도가 있으면 그것으로 예측값을 계산
     eR, rej = ps["heat_eR"], ps["h_reject"]
     fail = rej | ~np.isfinite(eR) | (np.nan_to_num(eR, nan=np.inf) > 10.0)
     # 자가 경고 점수 (scripts/self_check.py가 렌더로 정한 모델과 기준)
@@ -201,7 +202,7 @@ def cmd_analyze(a) -> None:
     for i, lab in enumerate(labels):
         j = by_name[Path(lab["filename"]).stem]
         rows.append(dict(name=j["name"], t_min=j["t_s"] / 60, u_deg=j["u_deg"], phase_deg=j["phase_deg"],
-                         azimuth_deg=j["azimuth_deg"], p_fail_map=float(p_fail_from_map([j["phase_deg"]])[0]),
+                         azimuth_deg=j["azimuth_deg"], p_fail_map=float(p_fail_from_map([j["phase_deg"]], table)[0]),
                          heat_eR=float(eR[i]) if np.isfinite(eR[i]) else "", reject=int(rej[i]), fail=int(fail[i]),
                          warn="" if not np.isfinite(warn[i]) else int(warn[i])))
     OUT.mkdir(parents=True, exist_ok=True)
@@ -354,6 +355,7 @@ def main() -> int:
     sa = sub.add_parser("analyze")
     sa.add_argument("--run", required=True)
     sa.add_argument("--weights", default="offline")
+    sa.add_argument("--map", default=str(ROOT / "outputs" / "failure_map" / "speedplus_sunsweep_v01_offline_by_phase.csv"))
     a = p.parse_args()
     {"plan": cmd_plan, "jobs": cmd_jobs, "analyze": cmd_analyze}[a.cmd](a)
     return 0
