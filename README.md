@@ -6,7 +6,8 @@ A lighting simulator for orbital scenes that maps **under which sun conditions a
 (a "failure map"), and tests whether targeted synthetic data can reduce those failures.
 
 > Status: **v0.2** — on top of v0.1 (reproduce the problem, sun-angle rendering, failure map + retraining experiments) it adds
-> **(1) a self-check that warns when the estimate is likely wrong, (2) one-orbit scenarios, (3) a web demo and a demo video**.
+> **(1) a self-check that warns when the estimate is likely wrong, (2) one-orbit scenarios, (3) a web demo and a demo video,
+> (4) repeated training runs to measure run-to-run variance**.
 > v0.1 ended with "a gain on synthetic data is not a gain on real data"; v0.2 follows that rule: thresholds are set on renders only and
 > evaluated on real-lighting images. Every GPU step was re-run on Modal and reproduces the v0.1 numbers (`cloud/`).
 
@@ -16,12 +17,13 @@ A lighting simulator for orbital scenes that maps **under which sun conditions a
 |---|---|
 | Reproduce the gap | SPNv2 public weights: pose score is 5–8× worse on real-lighting (HIL) images than on synthetic; ~1 in 10 HIL images is off by >10° |
 | Failure map | As the sun phase angle goes from 0° to 160°, the failure rate rises from 1% to 71%. The key variable is how much of the satellite is in shadow |
-| Retraining | Mixing in back-lit renders cuts failures on the same-renderer sun-angle test from 26% to 14%, but raises HIL failures from 9% to 11% (lightbox) and 16% to 21% (sunlamp) |
+| Retraining | Mixing in back-lit renders cuts failures on the same-renderer sun-angle test from 26% to 14%, but raises HIL failures from 9% to 11% (lightbox) and 16% to 21% (sunlamp) (one run per condition, see (4)) |
 | Domain randomization | Randomizing materials/textures in the same renders keeps the sun-angle gain (26% → 14%) and brings sunlamp failures back to the control level (15.1% vs 15.7%); lightbox is still slightly worse (9.9% vs 8.9%) |
-| Lesson | An improvement on a synthetic failure map does not imply a real-world improvement. **Claims must be checked on real-lighting data** |
+| Lesson | An improvement on a synthetic failure map does not imply a real-world improvement. **Claims must be checked on real-lighting data, against the run-to-run variance of repeated training** |
 | **v0.2 (1) Self-check** | Disagreement between SPNv2's two heads plus keypoint confidence flags "this estimate is probably wrong". Fitted on renders only; on real-lighting images, dropping the warned images cuts failures **13.0% → 3.2% (sunlamp)** and **8.1% → 2.2% (lightbox)**, AUROC 0.906 / 0.924 |
 | **v0.2 (2) One orbit** | In a 500 km circular orbit, where the chaser waits changes the risky time (beta = 30°: H-bar on the sun side 0 min vs the far side 61 min, predicted from the map). Rendering those passes: 2.9% vs 11.1% failures |
 | **v0.2 (3) Web demo** | Open `site/index.html` (no server, no network): move the sun, see warnings on real-lighting photos, play an orbit |
+| **v0.2 (4) Repeated training** | Retraining the same recipe with a different seed moves real-lighting failure rates by **up to 5.7 points**. Adding renders to the full SPEED+ set (lightbox +0.5, sunlamp −1.4 points) stays inside that spread, so it is not a real-world gain; only the render gain (27% → 15%) is stable across seeds |
 
 ## Problem
 
@@ -123,6 +125,7 @@ What we learned:
 - **Large gains inside our own renderer.** Overall sun-angle test failures 26.4% → 13.6%; at 60–100° phase, 16.3% → 5.0%.
 - **Worse on real-lighting HIL images.** Versus the control: lightbox 8.9% → 10.7%, sunlamp 15.7% → 20.6%.
   A paired McNemar test on the same images rules out chance for both (p = 1.8e-8 and 1.2e-13).
+  Note that this test ignores training randomness: in v0.2 (4), retraining the same recipe moved real-lighting failure rates by up to 5.7 points.
 - The model also improved under front lighting (phase 0°: median rotation error 1.46° → 1.11°). That has nothing to do with
   lighting, so part of the sun-angle gain looks like **adaptation to our renderer's appearance rather than learning to handle back-lighting**.
 - Training further on SPEED+ alone without style augmentation (control) already made HIL slightly worse than the public weights,
@@ -135,7 +138,7 @@ Possible causes and next experiments:
 - Renderer gap: one fixed material/texture setup → randomize materials and textures in the renders (domain randomization) — **tested in Phase 3c**
 - Geometry gap: checked and ruled out as a major cause — the SPIN model outline matches SPEED+ images to ~2 px (about 5 mm) and the keypoints sit in the same place relative to both (an earlier "18–25 mm" figure measured distance to the nearest mesh vertex, not to the actual feature)
 - Nearly invisible back-lit images may dilute the training signal → tune the render share and phase-angle distribution
-- One run per condition, so run-to-run variance is unknown → repeat training
+- One run per condition, so run-to-run variance is unknown → repeat training — **measured in v0.2 (4)**
 
 Reproduce:
 ```bash
@@ -190,7 +193,7 @@ What we learned:
   so part of the remaining HIL gap may come from seeing fewer SPEED+ images rather than from the renders. One run per condition.
 
 Next: add renders on top of the full SPEED+ set instead of replacing half of it, tune the render share and phase-angle distribution,
-and repeat training runs to measure run-to-run variance.
+and repeat training runs to measure run-to-run variance. (The first and last were done in v0.2 (4).)
 
 Reproduce (after Phase 3b):
 ```bash
@@ -207,7 +210,7 @@ python scripts/compare_finetune.py --weights offline ftctrl_v01:final ft_v01:fin
 
 The full experiment log is in [`experiments/LOG.md`](experiments/LOG.md) (Korean).
 
-## v0.2 — self-check, one orbit, web demo
+## v0.2 — self-check, one orbit, web demo, repeated training
 
 ### Reproduction on Modal
 
@@ -263,6 +266,59 @@ worse (V-bar: right *when* the map said, after leaving the Earth's shadow, but 5
 
 Open `site/index.html` (data in `site/data/*.js`, built by `scripts/build_site.py`; image licenses in `site/img/README.md`).
 The narrated Korean demo video is made by `python3 demo/make.py` (macOS voice, Playwright recording, ffmpeg subtitles).
+
+### (4) Repeated training: can a single-run comparison be trusted?
+
+The v0.1 retraining comparisons (Phase 3b, 3c) used one training run per condition. v0.2 trains the condition suggested at the end of Phase 3c,
+**the full 16,000 SPEED+ images plus 7,500 randomized-material renders** (C), and retrains the control (A) and C **once more with a different seed**.
+The seed changes which SPEED+ images are used, the train/validation split and the training order (`build_finetune_set.py --seed 1`).
+C trains for 4 epochs so that the number of training steps matches A (23,500 × 4 ≈ 16,000 × 6). Everything else follows Phase 3b; all runs are on a Modal A10
+and evaluated at the final epoch.
+
+![seed spread](docs/figures/seed_spread.png)
+
+| Model | Seed | lightbox fail | sunlamp fail | Sun-angle test fail 0–40° | 60–100° | 120–160° |
+|---|---|---|---|---|---|---|
+| Public weights (offline) | — | 8.1% | 13.0% | 2.6% | 16.5% | 50.2% |
+| A: control, 16,000 SPEED+ | 0 | 10.3% | 13.3% | 2.5% | 16.2% | 54.2% |
+| A | 1 | 7.5% | 18.9% | 4.5% | 16.5% | 52.4% |
+| C: 16,000 SPEED+ + randomized renders | 0 | 9.2% | 16.2% | 0.6% | 5.3% | 33.5% |
+| C | 1 | 9.5% | 13.1% | 0.6% | 5.5% | 34.8% |
+
+(Sun-angle test = the 6,500 images re-rendered in v0.2. Synthetic validation failures are 0.1–0.2% for all.)
+
+Paired McNemar tests, C vs A (images only one model fails, C only / A only):
+
+| Seed | lightbox | sunlamp | Sun-angle renders |
+|---|---|---|---|
+| 0 | 216 / 286, p = 0.002 → **C better** | 184 / 101, p = 1e-6 → **A better** | 84 / 877 → C better |
+| 1 | 324 / 186, p = 1e-9 → **A better** | 87 / 250, p = 2e-19 → **C better** | 85 / 840 → C better |
+
+What we learned:
+- **The same recipe gives quite different real-lighting failure rates from run to run.** The control moves from 10.3% to 7.5% (lightbox)
+  and from 13.3% to 18.9% (sunlamp, up to 5.7 points) when only the seed changes. The v0.1 control run (8.9%, 15.7%) falls in the same range.
+- **The C-vs-A verdict flips with the seed.** Each per-seed p-value is tiny, but the test only compares two fixed sets of weights and ignores
+  training randomness, so **a small p-value from a single-run comparison is not evidence of a condition effect.**
+- Averaged over the two seeds, C − A is +0.5 points (lightbox) and −1.4 points (sunlamp), inside the run-to-run spread. **We cannot say that adding
+  renders makes real-lighting performance better or worse.**
+- **The render gain is stable**: overall sun-angle test failures drop from 26.7% / 26.6% (A) to 14.5% / 15.0% (C), regardless of the seed.
+- **Correction to v0.1**: the Phase 3b and 3c McNemar p-values come from single-run comparisons and have the same limitation. The fixed-material model (3b) at
+  10.7% / 20.6% is above all three control runs (lightbox 7.5–10.3%, sunlamp 13.3–18.9%), which points to a real drop, but one run per condition cannot confirm it.
+- A real-lighting improvement claim needs several seeds per condition (e.g. five or more), compared against the seed-to-seed spread.
+  The self-check (1) and the orbit results (2) use the public weights as they are (no retraining), so this variance does not affect them.
+
+Reproduce (Modal, about 2 h on an A10 per run):
+```bash
+bash cloud/experiments.sh finetune A          # control, seed 0
+bash cloud/experiments.sh finetune C          # full SPEED+ + randomized renders
+SEED=1 bash cloud/experiments.sh finetune A
+SEED=1 bash cloud/experiments.sh finetune C
+uvx --python 3.12 modal run cloud/modal_app.py::run_sh --cmd "python scripts/finetune_stats.py \
+    --pair ftdrfull_v01:final ftctrl_v01:final --pair ftdrfull_v01s1:final ftctrl_v01s1:final \
+    --seeds ftctrl_v01:final,ftctrl_v01s1:final --seeds ftdrfull_v01:final,ftdrfull_v01s1:final"
+uvx --python 3.12 modal volume get orbitlight-data outputs/failure_map/finetune_stats.json outputs/failure_map/
+python scripts/seed_spread_figure.py          # → outputs/figures/seed_spread.png
+```
 
 ## Setup
 
