@@ -146,9 +146,10 @@ def fetch_data() -> None:
         vol.commit()
 
     # 평가용 전처리 (eval_spnv2_baseline.sh의 전처리 부분과 같음). 세 도메인을 동시에.
-    cfg = "third_party/spnv2/experiments/offline_train_full_config_phi3_BN.yaml"
-    common = ("DATASET.ROOT data/speedplus DATASET.DATANAME speedplusv2 "
-              "DATASET.KEYPOINTS third_party/spnv2/core/utils/models/tangoPoints.mat DIST.MULTIPROCESSING_DISTRIBUTED False")
+    # SPNv2는 DATASET.KEYPOINTS 등을 DATASET.ROOT 기준으로 이어 붙이므로 경로는 모두 절대 경로로 준다.
+    cfg = f"{w}/third_party/spnv2/experiments/offline_train_full_config_phi3_BN.yaml"
+    common = (f"DATASET.ROOT {w}/data/speedplus DATASET.DATANAME speedplusv2 "
+              f"DATASET.KEYPOINTS {w}/third_party/spnv2/core/utils/models/tangoPoints.mat DIST.MULTIPROCESSING_DISTRIBUTED False")
     jobs = []
     for dom, js in (("synthetic", "synthetic/validation.json"), ("lightbox", "lightbox/test.json"), ("sunlamp", "sunlamp/test.json")):
         csv = speed / dom / "labels" / (Path(js).stem + ".csv")
@@ -157,7 +158,10 @@ def fetch_data() -> None:
         jobs.append(f"$PY -W ignore third_party/spnv2/tools/preprocess.py --cfg {cfg} --jsonfile {js} --no_masks {common} "
                     f"> /tmp/pre_{dom}.log 2>&1")
     if jobs:
-        rc = _run(" & ".join(jobs) + " & wait; tail -n 3 /tmp/pre_*.log", w)
+        # 동시에 돌리고, 하나라도 실패하면 실패로 끝낸다
+        script = "pids=(); " + " ".join(f"( {j} ) & pids+=($!);" for j in jobs) + \
+                 ' fail=0; for p in "${pids[@]}"; do wait "$p" || fail=1; done; tail -n 3 /tmp/pre_*.log; exit $fail'
+        rc = _run(script, w)
         vol.commit()
         if rc != 0:
             raise RuntimeError("전처리 실패")
@@ -175,7 +179,7 @@ def sh_cpu(cmd: str) -> int:
     return rc
 
 
-@app.function(volumes={VOL: vol}, gpu="L4", cpu=8, memory=32768, timeout=6 * 3600)
+@app.function(volumes={VOL: vol}, gpu=["L4", "A10", "L40S"], cpu=4, memory=16384, timeout=6 * 3600)
 def sh_gpu(cmd: str) -> int:
     w = _workdir()
     vol.reload()
@@ -187,22 +191,27 @@ def sh_gpu(cmd: str) -> int:
 
 @app.local_entrypoint()
 def run_sh(cmd: str, gpu: str = "") -> None:
-    """GPU 없이: --gpu ""(기본). GPU: --gpu L4 | A10 | L40S | A100 ..."""
-    rc = sh_gpu.with_options(gpu=gpu).remote(cmd) if gpu else sh_cpu.remote(cmd)
+    """GPU 없이: --gpu ""(기본). GPU: --gpu L4 | A10 | L40S | "L4,A10,L40S"(앞에서부터 남는 것) ..."""
+    gpus = [g.strip() for g in gpu.split(",") if g.strip()]
+    if not gpus:
+        rc = sh_cpu.remote(cmd)
+    else:
+        # with_options는 GPU 하나(문자열)만 받는다. 여러 개면 함수에 정해 둔 후보 목록(L4 → A10 → L40S)을 쓴다
+        rc = sh_gpu.remote(cmd) if len(gpus) > 1 else sh_gpu.with_options(gpu=gpus[0]).remote(cmd)
     if rc != 0:
         raise SystemExit(rc)
 
 
 # ---------------------------------------------------------------- 렌더 (여러 GPU로 나눠서)
 
-@app.function(volumes={VOL: vol}, gpu="L4", cpu=4, memory=16384, timeout=3 * 3600, max_containers=24)
-def render_chunk(run: str, start: int, count: int, device: str = "OPTIX") -> dict:
+@app.function(volumes={VOL: vol}, gpu=["L4", "A10", "L40S"], cpu=4, memory=16384, timeout=3 * 3600, max_containers=24)
+def render_chunk(run: str, start: int, count: int, device: str = "OPTIX", denoiser: str = "OIDN") -> dict:
     w = _workdir()
     vol.reload()
     cmd = ("$BLENDER -b --factory-startup -P src/orbitlight/render/blender_render.py -- "
            f"--jobs outputs/renders/{run}/jobs.json --model data/models/spin_tango/tango_fix.obj "
-           f"--device {device} --skip-existing --start {start} --count {count} 2>&1 "
-           "| grep -E '^\\[render\\]|Error|ERROR|Traceback'")
+           f"--device {device} --denoiser {denoiser} --skip-existing --start {start} --count {count} 2>&1 "
+           "| grep --line-buffered -E '^\\[render\\]|Error|ERROR|Traceback'")
     t0 = time.time()
     rc = _run(cmd, w)
     vol.commit()
@@ -210,17 +219,19 @@ def render_chunk(run: str, start: int, count: int, device: str = "OPTIX") -> dic
 
 
 @app.function(volumes={VOL: vol}, cpu=1, memory=2048, timeout=6 * 3600)
-def render_all(run: str, chunks: int = 16, device: str = "OPTIX", gpu: str = "L4") -> list[dict]:
+def render_all(run: str, chunks: int = 16, device: str = "OPTIX", gpu: str = "L4,A10,L40S") -> list[dict]:
     vol.reload()
     n = len(json.loads((Path(VOL) / "outputs" / "renders" / run / "jobs.json").read_text())["jobs"])
     step = -(-n // chunks)
     args = [(run, s, min(step, n - s), device) for s in range(0, n, step)]
     print(f"{run}: {n} images in {len(args)} chunks of <= {step} on {gpu}", flush=True)
-    return list(render_chunk.with_options(gpu=gpu).starmap(args))
+    gpus = [g.strip() for g in gpu.split(",") if g.strip()]
+    fn = render_chunk if len(gpus) > 1 else render_chunk.with_options(gpu=gpus[0])
+    return list(fn.starmap(args))
 
 
 @app.local_entrypoint()
-def run_render(run: str, chunks: int = 16, device: str = "OPTIX", gpu: str = "L4") -> None:
+def run_render(run: str, chunks: int = 16, device: str = "OPTIX", gpu: str = "L4,A10,L40S") -> None:
     res = render_all.remote(run, chunks, device, gpu)
     bad = [r for r in res if r["rc"] != 0]
     print(f"chunks {len(res)}, failed {len(bad)}, slowest {max(r['sec'] for r in res):.0f}s, "

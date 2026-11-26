@@ -172,7 +172,7 @@ def hil_section(proj: Projector, a, sc: dict, effi_T: bool) -> dict:
                 ex.append(dict(group=g, img=f"img/{dom}/{fn}", eR=fnum(P["eR"][i], 1), reject=bool(rej[i]),
                                score=fnum(score[i]) if np.isfinite(score[i]) else None, kp=kp, kp_src=src,
                                kp_true=proj.from_q(labels[i]["q_vbs2tango_true"], labels[i]["r_Vo2To_vbs_true"])))
-        st = sc["domains"][dom]["sets"]["전체 신호"]
+        st = sc["domains"][dom]["sets"][sc.get("primary", "전체 신호")]
         out["domains"][dom] = dict(n=len(fail), fail_rate=float(fail.mean()), warn_rate=st["warn_rate"], recall=st["recall"],
                                    kept_fail_rate=st["kept_fail_rate"], auroc=st["auroc"],
                                    auroc_by_signal={k: v["auroc"] for k, v in sc["domains"][dom]["sets"].items()},

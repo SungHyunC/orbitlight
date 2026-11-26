@@ -51,17 +51,38 @@
     if (!dashed) for (const p of kp) { ctx.beginPath(); ctx.arc(p[0], p[1], 3.2, 0, 2 * Math.PI); ctx.fill(); }
     ctx.restore();
   }
+  // 정답 키포인트 둘레를 넉넉히 잡아 확대할 영역 [x0, y0, w, h] (표시 이미지 좌표, 화면 비율 유지)
+  function cropFor(kp, W, H) {
+    if (!kp) return [0, 0, W, H];
+    const xs = kp.map((p) => p[0]), ys = kp.map((p) => p[1]);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const ar = W / H;
+    let w = Math.max(Math.max(...xs) - Math.min(...xs), (Math.max(...ys) - Math.min(...ys)) * ar) * 1.6;
+    w = Math.min(W, Math.max(220, w));
+    const h = w / ar;
+    const x0 = Math.min(Math.max(0, cx - w / 2), W - w), y0 = Math.min(Math.max(0, cy - h / 2), H - h);
+    return [x0, y0, w, h];
+  }
+  let ZOOM = true;
   async function drawFrame(canvas, f, kpTrue, edges, showTrue, token) {
     const img = await loadImg(f.img);
     if (token && token !== canvas.dataset.token) return;          // 그 사이 다른 프레임이 요청됨
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    if (img) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    if (showTrue) drawPose(ctx, kpTrue, edges, "rgba(255,255,255,.75)", true, 1.6);
-    drawPose(ctx, f.kp, edges, f.fail ? C.fail : C.ok, false, 2.6);
+    const ctx = canvas.getContext("2d"), cw = canvas.width, ch = canvas.height;
+    const [x0, y0, w, h] = ZOOM ? cropFor(kpTrue, cw, ch) : [0, 0, cw, ch];
+    const k = cw / w, T = (kp) => kp && kp.map((p) => [(p[0] - x0) * k, (p[1] - y0) * k]);
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cw, ch);
+    if (img) {
+      const sx = img.naturalWidth / cw, sy = img.naturalHeight / ch;
+      ctx.drawImage(img, x0 * sx, y0 * sy, w * sx, h * sy, 0, 0, cw, ch);
+    }
+    if (showTrue) drawPose(ctx, T(kpTrue), edges, "rgba(255,255,255,.75)", true, 1.6);
+    drawPose(ctx, T(f.kp), edges, f.fail ? C.fail : C.ok, false, 2.6);
     if (f.warn) {
-      ctx.save(); ctx.fillStyle = "rgba(255,194,71,.95)"; ctx.font = "600 20px " + css("--font");
-      ctx.fillText("⚠ 자가 경고", 16, 32); ctx.restore();
+      const fs = Math.round(cw / 22);
+      ctx.save(); ctx.font = `700 ${fs}px ` + css("--font");
+      const tw = ctx.measureText("⚠ 자가 경고").width;
+      ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillRect(10, 10, tw + 24, fs * 1.6);
+      ctx.fillStyle = "rgba(255,194,71,1)"; ctx.fillText("⚠ 자가 경고", 22, 10 + fs * 1.15); ctx.restore();
     }
   }
   const tag = (cls, text) => `<span class="tag ${cls}">${text}</span>`;
@@ -187,6 +208,7 @@
         (f.kp_src === "efficientpose" ? ` <span style="color:var(--ink-3)">(키포인트 부족으로 거부 → 다른 헤드의 답을 그림)</span>` : "");
     }
     $("#show-true").addEventListener("change", render);
+    $("#zoom").addEventListener("change", (e) => { ZOOM = e.target.checked; render(); document.dispatchEvent(new Event("zoom")); });
     $("#sweep-play").addEventListener("click", () => {
       if (playing) { clearInterval(playing); playing = null; $("#sweep-play").textContent = "▶ 정면 → 역광으로 돌리기"; return; }
       const a = az || S.azimuths[0];
@@ -240,7 +262,7 @@
     // 신호별 AUROC
     const ac = $("#auroc-card");
     el("h4", { text: "어떤 신호가 실패를 찾나 (AUROC, 0.5 = 찍기)" }, ac);
-    const SIG = { "전체 신호": "전체 신호", "두 헤드 불일치": "두 답의 어긋남", "키포인트 확신도": "키포인트 확신도", "밝기(어두운 비율)": "어두운 정도" };
+    const SIG = { "모델 내부 신호": "모델 내부 신호 (기본)", "전체 신호": "+ 이미지 밝기", "두 헤드 불일치": "두 답의 어긋남", "키포인트 확신도": "키포인트 확신도", "밝기(어두운 비율)": "어두운 정도만" };
     const bars = el("div", { class: "bars" }, ac);
     for (const s of Object.keys(SIG)) {
       for (const [d, v] of Object.entries(H.domains)) {
@@ -389,6 +411,7 @@
       $("#orbit-readout").innerHTML = `태양 위상각 <b>${deg(f.phase)}</b> · 실패 지도 예측 ${pct(f.p_map)} &nbsp;|&nbsp; 실제 ${res} &nbsp;|&nbsp; ${f.warn ? tag("warn", "자가 경고") : tag("quiet", "경고 없음")}`;
     }
     slider.addEventListener("input", () => go(+slider.value));
+    document.addEventListener("zoom", () => go(k));
     $("#orbit-play").addEventListener("click", () => {
       if (timer) { clearInterval(timer); timer = null; $("#orbit-play").textContent = "▶ 재생"; return; }
       $("#orbit-play").textContent = "■ 멈춤";

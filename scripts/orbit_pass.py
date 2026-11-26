@@ -129,7 +129,7 @@ def cmd_plan(a) -> None:
         print(f"| {s['beta_deg']:.0f}° | {s['hold_ko']} | {s['eclipse_min']:.1f} | {s['high_min']:.1f} | {s['safe_min']:.1f} | "
               f"{s['mean_p_lit']:.1%} | {rng} |")
     if not a.no_figure:
-        plot_plan(OUT / "plan_timeline.csv", meta, ROOT / "docs" / "figures" / "orbit_plan.png")
+        plot_plan(OUT / "plan_timeline.csv", meta, ROOT / "outputs" / "figures" / "orbit_plan.png")
 
 
 def cmd_jobs(a) -> None:
@@ -190,7 +190,7 @@ def cmd_analyze(a) -> None:
         import self_check as SC
 
         sc = json.loads(sc_path.read_text())
-        mdl = sc["models"]["전체 신호"]
+        mdl = sc["models"][sc.get("primary", "전체 신호")]
         d, _ = SC.load_domain(ev, run / "sunsweep" / "images_768x512_RGB", labels, sc["effi_R_transposed"])
         m = SC.usable(d, mdl["features"])
         X = np.c_[[d[f][m] for f in mdl["features"]]].T
@@ -224,7 +224,7 @@ def cmd_analyze(a) -> None:
                    kept_fail_rate=float(fl[~wv].mean()) if (~wv).any() else None)
     (OUT / f"{a.run}_{wd}.json").write_text(json.dumps(res, indent=1, ensure_ascii=False))
     print(json.dumps(res, indent=1, ensure_ascii=False))
-    plot_pass(rows, cfg, res, ROOT / "docs" / "figures" / f"orbit_{a.run.replace('speedplus_', '')}_{wd}.png")
+    plot_pass(rows, cfg, res, ROOT / "outputs" / "figures" / f"orbit_{a.run.replace('speedplus_', '')}_{wd}.png")
 
 
 def _style(ax, SURFACE, GRID, INK2):

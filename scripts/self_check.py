@@ -44,11 +44,16 @@ from orbitlight.eval.spnv2_results import load_per_sample  # noqa: E402
 from orbitlight.render.geometry import quat2dcm  # noqa: E402
 
 FAIL_DEG = 10.0
+# 기본 경고 점수: 모델 내부 신호(두 헤드 불일치 + 키포인트 확신도). 이미지 밝기 신호는 렌더에서만 통하고 실물 조명에서는
+# 통하지 않았다(sunlamp AUROC 0.50). HIL 한 도메인으로 조합을 고르고 다른 도메인에서 평가하는 교차 선택에서도
+# 두 방향 모두 이 조합이 뽑혔다 (summary.json의 cross_select).
+PRIMARY = "모델 내부 신호"
 RECALL_TARGET = 0.90
 SPEED = ROOT / "data" / "speedplus" / "speedplusv2"
 FEATURES = ["log_head_dR", "log_head_dT", "peak_mean", "peak_min", "peak_5th", "peak_n05",
             "img_dark", "img_lit", "img_mean", "img_sat", "box_area"]
-SINGLE = {"두 헤드 불일치": ["log_head_dR"], "키포인트 확신도": ["peak_mean", "peak_5th"], "밝기(어두운 비율)": ["img_dark"]}
+SINGLE = {"모델 내부 신호": ["log_head_dR", "log_head_dT", "peak_mean", "peak_min", "peak_5th", "peak_n05"],
+          "두 헤드 불일치": ["log_head_dR"], "키포인트 확신도": ["peak_mean", "peak_5th"], "밝기(어두운 비율)": ["img_dark"]}
 
 
 def rot_angle_deg(Ra: np.ndarray, Rb: np.ndarray) -> np.ndarray:
@@ -207,7 +212,7 @@ def main() -> int:
 
     # 1) 렌더에서 점수 모델과 경고 기준
     R = data["renders"]
-    summary = dict(weights=a.weights, run=a.run, fail_deg=FAIL_DEG, recall_target=RECALL_TARGET,
+    summary = dict(weights=a.weights, run=a.run, fail_deg=FAIL_DEG, recall_target=RECALL_TARGET, primary=PRIMARY,
                    effi_R_transposed=tr, features=feats, models={}, domains={})
     models = {}
     for sname, fs in sets.items():
@@ -238,14 +243,25 @@ def main() -> int:
                 auroc=auroc(s_all[m], y), n_answered=int(m.sum()), answered_fail_rate=float(y.mean()) if m.any() else None,
                 warn_rate=float(warn.mean()), recall=float((warn & d["fail"]).sum() / max(d["fail"].sum(), 1)),
                 kept_fail_rate=float(d["fail"][kept].mean()) if kept.any() else None)
-            if sname == "전체 신호" or sname == "두 헤드 불일치":
+            if sname in (PRIMARY, "전체 신호"):
                 curves[(name, sname)] = risk_coverage(s_all, d["fail"], d["reject"])
-            if sname == "전체 신호":
+            if sname == PRIMARY:
                 d["score"], d["warn"] = s_all, warn
         summary["domains"][name] = row
-        s0 = row["sets"]["전체 신호"]
+        s0 = row["sets"][PRIMARY]
         print(f"[{name}] 실패율 {row['fail_rate']:.3f} → 경고 {s0['warn_rate']:.3f}, 경고 뒤 남은 실패율 "
               f"{s0['kept_fail_rate']:.3f}, 실패 중 경고 {s0['recall']:.3f}, AUROC {s0['auroc']:.3f}", flush=True)
+    # 교차 선택: 신호 조합을 한 HIL 도메인의 AUROC로 고르고, 다른 도메인에서 평가한다
+    if all(d in summary["domains"] for d in ("lightbox", "sunlamp")):
+        cand = ["전체 신호", "모델 내부 신호"]
+        cross = {}
+        for pick_on, test_on in (("lightbox", "sunlamp"), ("sunlamp", "lightbox")):
+            best = max(cand, key=lambda c: summary["domains"][pick_on]["sets"][c]["auroc"])
+            cross[f"{pick_on}->{test_on}"] = dict(chosen=best, test=summary["domains"][test_on]["sets"][best])
+        summary["cross_select"] = cross
+        for k, v in cross.items():
+            print(f"[교차 선택] {k}: {v['chosen']} → AUROC {v['test']['auroc']:.3f}, 경고 뒤 남은 실패율 {v['test']['kept_fail_rate']:.3f}")
+
     # 이미지별 신호·점수·경고 (웹 데모와 궤도 분석이 읽는다)
     cols = ["filename", "reject", "fail", "warn", "score", "heat_eR", "effi_eR", "head_dR", "head_dT"] + FEATURES[2:]
     for name, d in data.items():
@@ -256,7 +272,7 @@ def main() -> int:
                 w.writerow([d[c][i] if c == "filename" else (int(d[c][i]) if d[c].dtype == bool else
                             ("" if not np.isfinite(d[c][i]) else round(float(d[c][i]), 5))) for c in cols])
     (out / "summary.json").write_text(json.dumps(summary, indent=1, ensure_ascii=False))
-    plot(summary, curves, ROOT / "docs" / "figures" / f"self_check_{wd}.png")
+    plot(summary, curves, ROOT / "outputs" / "figures" / f"self_check_{wd}.png")
     print(f"-> {out / 'summary.json'}")
     return 0
 
@@ -273,11 +289,11 @@ def plot(summary: dict, curves: dict, path: Path) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.8), facecolor=SURFACE)
     ax = axes[0]
     for d in doms:
-        for sname, ls in (("전체 신호", "-"), ("두 헤드 불일치", "--")):
+        for sname, ls in ((PRIMARY, "-"), ("전체 신호", "--")):
             if (d, sname) in curves:
                 cov, risk = curves[(d, sname)]
                 ax.plot(cov * 100, risk * 100, ls, color=COL[d], lw=2 if ls == "-" else 1.3,
-                        label=f"{d} · {'all signals' if sname == '전체 신호' else 'head disagreement'}")
+                        label=f"{d} · {'model-internal signals' if sname == PRIMARY else 'all signals incl. image darkness'}")
         fr = summary["domains"][d]["fail_rate"]
         ax.axhline(fr * 100, color=COL[d], lw=0.8, ls=":")
     ax.set_xlabel("images accepted (most confident first) [%]")
@@ -290,7 +306,9 @@ def plot(summary: dict, curves: dict, path: Path) -> None:
     for k, d in enumerate(doms):
         v = [summary["domains"][d]["sets"][s]["auroc"] for s in snames]
         ax.bar(x + (k - 0.5) * 0.38, v, 0.36, color=COL[d], label=d)
-    ax.set_xticks(x, ["all", "head dR", "keypoint peak", "darkness"][: len(snames)])
+    labels = {"전체 신호": "all", "모델 내부 신호": "model-internal", "두 헤드 불일치": "head dR", "키포인트 확신도": "keypoint peak",
+              "밝기(어두운 비율)": "darkness"}
+    ax.set_xticks(x, [labels.get(s, s) for s in snames])
     ax.set_ylim(0.5, 1.0)
     ax.set_ylabel("AUROC (answered images)")
     ax.set_title("(b) Which signal finds failures on HIL", loc="left", fontsize=10)

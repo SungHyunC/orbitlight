@@ -43,6 +43,7 @@
         <figcaption id="sweep-readout" class="readout"></figcaption>
         <div class="controls">
           <label><input type="checkbox" id="show-true" checked> 정답 자세(흰 점선)</label>
+          <label><input type="checkbox" id="zoom" checked> 위성 확대</label>
           <button id="sweep-play" class="btn">▶ 정면 → 역광으로 돌리기</button>
         </div>
       </figure>
@@ -57,8 +58,9 @@
   <section id="tab-hil" class="panel" role="tabpanel" hidden>
     <div class="intro">
       <h2>실물 조명 사진에서도 "지금 틀렸다"를 알아챌까</h2>
-      <p>SPNv2가 낸 두 답(키포인트로 계산한 자세와 직접 맞힌 자세)이 얼마나 어긋나는지, 키포인트를 얼마나 확신하는지, 위성이 얼마나 어두운지를 묶어
-        <b>경고 점수</b>를 만들었습니다. 점수와 경고 기준은 <b>렌더 이미지에서만</b> 정했고, 아래는 실험실에서 실물 모형을 실제 조명으로 찍은 사진(SPEED+ lightbox·sunlamp)에서 평가한 결과입니다.</p>
+      <p>SPNv2는 한 사진에서 답을 두 번 냅니다(키포인트를 찾아 계산한 자세, 직접 맞힌 자세). <b>두 답이 얼마나 어긋나는지</b>와 <b>키포인트를 얼마나 확신하는지</b>,
+        즉 모델 안에서 나오는 신호로 <b>경고 점수</b>를 만들었습니다. 점수와 경고 기준은 <b>렌더 이미지에서만</b> 정했고, 아래는 실험실에서 실물 모형을 실제 조명으로 찍은 사진
+        (SPEED+ lightbox·sunlamp)에서 평가한 결과입니다. 이미지 밝기 신호도 시험했지만 렌더에서만 통하고 실물 사진에서는 통하지 않아 기본 점수에서 뺐습니다.</p>
     </div>
     <div class="hil-stats" id="hil-stats"></div>
     <div class="two">

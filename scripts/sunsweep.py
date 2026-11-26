@@ -141,9 +141,56 @@ def cmd_render(a) -> None:
         raise SystemExit(p.returncode)
 
 
+_W: dict = {}   # 병렬 변환 작업자마다 한 번 읽는 모형·마스크 캐시
+
+
+def _init_worker(model_path: str) -> None:
+    from orbitlight.render.postprocess import load_obj
+    _W["VF"] = load_obj(Path(model_path))
+    _W["masks"] = {}
+
+
+def _post_job(task):
+    """렌더 한 장을 SPEED+ 형식으로 (병렬 변환용). 노이즈 난수는 이미지마다 (seed + 1, 순번)으로 정해 작업자 수와 무관하다."""
+    import cv2
+    from orbitlight.render.postprocess import silhouette_mask, to_speedplus_image
+
+    j, idx, run_dir, camera, post, seed, masks_only = task
+    dom = run_dir / DOMAIN
+    raw = run_dir / "raw" / f"{j['name']}.png"
+    if not raw.exists():
+        return None
+    fn = f"{j['name']}.jpg"
+    if masks_only:
+        img = cv2.imread(str(dom / "images" / fn), cv2.IMREAD_GRAYSCALE)
+    else:
+        rng = np.random.default_rng([seed + 1, idx])
+        img = to_speedplus_image(cv2.imread(str(raw), cv2.IMREAD_UNCHANGED), camera, rng, post["noise_std"], post["noise_offset"])
+        cv2.imwrite(str(dom / "images" / fn), img, [cv2.IMWRITE_JPEG_QUALITY, post["jpg_quality"]])
+    key = (j["pose_id"], tuple(np.round(j["q"], 9)), tuple(np.round(j["r"], 9)))
+    if key not in _W["masks"]:
+        V, F = _W["VF"]
+        _W["masks"][key] = silhouette_mask(V, F, j["q"], j["r"], camera)
+    m = _W["masks"][key]
+    cv2.imwrite(str(dom / "masks" / fn.replace(".jpg", ".png")), m)
+    fg = img[m > 0]
+    label = dict(filename=fn, q_vbs2tango_true=j["q"], r_Vo2To_vbs_true=j["r"])
+    row = dict(filename=fn, pose_id=j["pose_id"], source_image=j["source_image"],
+               phase_deg=j["phase_deg"], azimuth_deg=j["azimuth_deg"],
+               dist_m=float(np.linalg.norm(j["r"])),
+               fg_mean=float(fg.mean()) if fg.size else 0.0,
+               fg_p95=float(np.percentile(fg, 95)) if fg.size else 0.0,
+               fg_sat_frac=float((fg >= 250).mean()) if fg.size else 0.0,
+               fg_dark_frac=float((fg <= 10).mean()) if fg.size else 0.0)
+    return label, row
+
+
 def cmd_post(a) -> None:
     import cv2
     from orbitlight.render.postprocess import load_obj, silhouette_mask, to_speedplus_image
+
+    if a.workers > 1:
+        return _post_parallel(a)
 
     run = ROOT / "outputs" / "renders" / a.run
     cfg = json.loads((run / "jobs.json").read_text())
@@ -190,6 +237,28 @@ def cmd_post(a) -> None:
     print(f"{len(labels)} images -> {dom}")
 
 
+def _post_parallel(a) -> None:
+    from multiprocessing import Pool
+
+    run = ROOT / "outputs" / "renders" / a.run
+    cfg = json.loads((run / "jobs.json").read_text())
+    dom = run / DOMAIN
+    (dom / "images").mkdir(parents=True, exist_ok=True)
+    (dom / "masks").mkdir(parents=True, exist_ok=True)
+    (run / "camera.json").write_text(json.dumps(cfg["camera"], indent=2))
+    tasks = [(j, i, run, cfg["camera"], cfg["post"], cfg["seed"], a.masks_only) for i, j in enumerate(cfg["jobs"])]
+    with Pool(a.workers, initializer=_init_worker, initargs=(str(ROOT / cfg["model"]),)) as pool:
+        res = [r for r in pool.imap(_post_job, tasks, chunksize=8) if r is not None]
+    labels, rows = [r[0] for r in res], [r[1] for r in res]
+    if not a.masks_only:
+        (dom / "test.json").write_text(json.dumps(labels, indent=1))
+    with open(dom / "meta.csv", "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    print(f"{len(labels)} images -> {dom} ({a.workers} workers)")
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -217,6 +286,8 @@ def main() -> int:
     o = sub.add_parser("post")
     o.add_argument("--run", required=True)
     o.add_argument("--masks-only", action="store_true", help="이미지는 다시 만들지 않고 마스크·meta.csv만 갱신")
+    o.add_argument("--workers", type=int, default=1,
+                   help=">1이면 병렬 변환. 노이즈 난수를 이미지마다 따로 정하므로 1(순차, v0.1과 같은 노이즈)과 값이 다르다")
     a = p.parse_args()
     {"jobs": cmd_jobs, "render": cmd_render, "post": cmd_post}[a.cmd](a)
     return 0

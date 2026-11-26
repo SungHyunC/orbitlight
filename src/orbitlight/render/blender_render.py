@@ -45,6 +45,9 @@ def parse_args(argv):
     p.add_argument("--model", type=Path, required=True)
     p.add_argument("--outdir", type=Path, help="기본값: jobs.json 옆 raw/")
     p.add_argument("--device", default="OPTIX", choices=["OPTIX", "CUDA", "CPU"])
+    # AUTO: OPTIX 장치면 OptiX 노이즈 제거기(v0.1과 같음). OIDN: Intel Open Image Denoise를 GPU에서.
+    # 컨테이너(Modal 등)에는 OptiX 노이즈 제거기 가중치(/usr/share/nvidia/nvoptix.bin)가 없어서 OIDN을 쓴다.
+    p.add_argument("--denoiser", default="AUTO", choices=["AUTO", "OPTIX", "OIDN"])
     p.add_argument("--start", type=int, default=0)
     p.add_argument("--count", type=int, default=-1)
     p.add_argument("--skip-existing", action="store_true")
@@ -144,7 +147,7 @@ def apply_material_params(mp: dict | None) -> None:
         n["bump"].inputs["Strength"].default_value = tex.get("bump", 0.0) if o.get("textured", True) else 0.0
 
 
-def build_scene(cfg: dict, model: Path, device: str):
+def build_scene(cfg: dict, model: Path, device: str, denoiser: str = "AUTO"):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
     setup_device(scene, device)
@@ -192,8 +195,12 @@ def build_scene(cfg: dict, model: Path, device: str):
     scene.render.resolution_percentage = 100
     scene.cycles.samples = r["samples"]
     scene.cycles.use_denoising = r.get("denoise", True)
-    if device == "OPTIX":
+    if denoiser == "OPTIX" or (denoiser == "AUTO" and device == "OPTIX"):
         scene.cycles.denoiser = "OPTIX"          # 기본(OIDN)은 CPU에서 돌아 느림
+    elif denoiser == "OIDN":
+        scene.cycles.denoiser = "OPENIMAGEDENOISE"
+        if hasattr(scene.cycles, "denoising_use_gpu"):
+            scene.cycles.denoising_use_gpu = device != "CPU"
     scene.render.use_persistent_data = True      # 매 장마다 장면(BVH)을 다시 만들지 않음
     scene.cycles.max_bounces = r.get("max_bounces", 6)
     scene.cycles.seed = r.get("seed", 0)
@@ -211,7 +218,7 @@ def main() -> int:
     cfg = json.loads(args.jobs.read_text())
     outdir = args.outdir or args.jobs.parent / "raw"
     outdir.mkdir(parents=True, exist_ok=True)
-    scene, root, sun = build_scene(cfg, args.model, args.device)
+    scene, root, sun = build_scene(cfg, args.model, args.device, args.denoiser)
 
     jobs = cfg["jobs"][args.start:]
     if args.count >= 0:

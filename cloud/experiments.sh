@@ -39,7 +39,7 @@ trainrender)
     cpu "python scripts/sunsweep.py jobs --run speedplus_trainrender_dr_v01 --pose-source synthetic/train.json \
          --n-poses 4000 --random-per-pose 2 --phase-max 170 --strength-range 3,5 --color-depth 8 --seed 1 --randomize-materials"
     render speedplus_trainrender_dr_v01 24
-    cpu "python scripts/sunsweep.py post --run speedplus_trainrender_dr_v01" ;;
+    cpu "python scripts/sunsweep.py post --run speedplus_trainrender_dr_v01 --workers 8" ;;
 finetune)
     # A: 비교군 SPEED+ 16,000장 / B: SPEED+ 8,000장 + 무작위 재질 렌더 (Phase 3c)
     # C: SPEED+ 16,000장 + 무작위 재질 렌더. 학습 스텝 수를 A와 맞춤 (23,500장 × 4에폭 ≈ 16,000장 × 6에폭)
@@ -60,7 +60,7 @@ orbit)
         run="speedplus_orbit_b30_${hold/-/m}"; run="${run/+/p}"
         cpu "python scripts/orbit_pass.py jobs --run $run --beta 30 --hold $hold --step 15"
         render "$run" 8
-        cpu "python scripts/sunsweep.py post --run $run"
+        cpu "python scripts/sunsweep.py post --run $run --workers 8"
         gpu "RUN=$run bash scripts/eval_spnv2_renders.sh"
         cpu "python scripts/orbit_pass.py analyze --run $run"
     done ;;
