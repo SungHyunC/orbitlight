@@ -224,7 +224,7 @@ def cmd_analyze(a) -> None:
                    kept_fail_rate=float(fl[~wv].mean()) if (~wv).any() else None)
     (OUT / f"{a.run}_{wd}.json").write_text(json.dumps(res, indent=1, ensure_ascii=False))
     print(json.dumps(res, indent=1, ensure_ascii=False))
-    plot_pass(rows, cfg, res, ROOT / "outputs" / "figures" / f"orbit_{a.run.replace('speedplus_', '')}_{wd}.png")
+    plot_pass(rows, cfg, res, ROOT / "outputs" / "figures" / f"orbit_{a.run.replace('speedplus_orbit_', '')}_{wd}.png")
 
 
 def _style(ax, SURFACE, GRID, INK2):
@@ -286,11 +286,18 @@ def plot_pass(rows: list[dict], cfg: dict, res: dict, path: Path) -> None:
     fl = np.array([r["fail"] for r in rows], bool)
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6), facecolor=SURFACE, sharex=True,
                                    gridspec_kw=dict(height_ratios=[1, 1.3]))
-    ax1.plot(t, [r["phase_deg"] for r in rows], color=INK, lw=1.5)
+    # 식(그림자) 구간은 프레임이 없으므로 선을 끊는다
+    gap = np.r_[False, np.diff(t) > 1.5 * o["step_s"] / 60]
+    tt, ph, pm = [], [], []
+    for i, r in enumerate(rows):
+        if gap[i]:
+            tt.append(np.nan); ph.append(np.nan); pm.append(np.nan)
+        tt.append(t[i]); ph.append(r["phase_deg"]); pm.append(r["p_fail_map"] * 100)
+    ax1.plot(tt, ph, color=INK, lw=1.5)
     ax1.set_ylabel("sun phase angle [deg]")
     ax1.set_ylim(0, 180)
     ax1b = ax1.twinx()
-    ax1b.plot(t, np.array([r["p_fail_map"] for r in rows]) * 100, color="#d9622b", lw=1.2, ls="--")
+    ax1b.plot(tt, pm, color="#d9622b", lw=1.2, ls="--")
     ax1b.set_ylabel("map: failure rate [%]", color="#d9622b")
     ax1b.set_ylim(0, 100)
     ax2.scatter(t[~fl], np.clip(e[~fl], 0.1, 180), s=8, color="#3a9e6b", label="ok (< 10 deg)")
@@ -301,7 +308,7 @@ def plot_pass(rows: list[dict], cfg: dict, res: dict, path: Path) -> None:
     ax2.set_yscale("log")
     ax2.set_ylabel("rotation error [deg]")
     ax2.set_xlabel("time in orbit [min]")
-    ax2.legend(frameon=False, fontsize=8, loc="upper left", ncol=3)
+    ax2.legend(frameon=False, fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.2), ncol=3)
     T = o["period_s"] / 60
     for ax in (ax1, ax2):
         ax.set_xlim(0, T)

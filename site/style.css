@@ -102,8 +102,8 @@ table { border-collapse: collapse; width: 100%; font-size: 14px; }
 th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
 th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
 th { color: var(--ink-2); font-weight: 600; }
-td.hi { color: var(--fail); font-weight: 600; }
-td.lo { color: var(--ok); font-weight: 600; }
+td .hi, td.hi { color: var(--fail); font-weight: 600; }
+td .lo, td.lo { color: var(--ok); font-weight: 600; }
 .orbit-grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; align-items: start; }
 #orbit-diagram { width: 100%; height: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
 #orbit-diagram text { fill: var(--ink-2); font-size: 11px; font-family: var(--font); }

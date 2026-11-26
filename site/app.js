@@ -296,22 +296,25 @@
   (function orbit() {
     const panel = $("#tab-orbit");
     if (!O) { el("p", { class: "empty", text: "궤도 데이터가 아직 없습니다 (scripts/orbit_pass.py → build_site.py)." }, panel); return; }
-    // 계획표
+    // 계획표: 정지 위치 × β, 칸 = 위험 시간(실패율 ≥ 30%)과 빛 받는 동안 평균 실패율
     if (O.plan) {
+      const rows = O.plan.rows, betas = [...new Set(rows.map((r) => r.beta_deg))].sort((x, y) => x - y);
+      const holds = [...new Set(rows.map((r) => r.hold))];
       const t = el("table", {}, $("#plan"));
       const hr = el("tr", {}, el("thead", {}, t));
-      for (const h of ["β (궤도면과 태양 사이 각)", "정지 위치", "식 [분]", `위험 [분] (실패율 ≥ ${pct(O.plan.high, 0)})`, `안전 [분] (< ${pct(O.plan.low, 0)})`, "빛 받는 동안 평균 실패율"]) el("th", { text: h }, hr);
+      el("th", { text: "정지 위치" }, hr);
+      for (const b of betas) el("th", { text: `β ${b}° · 위험 시간 / 평균 실패율` }, hr);
       const tb = el("tbody", {}, t);
-      for (const r of O.plan.rows) {
+      for (const h of holds) {
         const tr = el("tr", {}, tb);
-        el("td", { text: `${r.beta_deg}°` }, tr);
-        el("td", { text: r.hold_ko }, tr);
-        el("td", { text: r.eclipse_min.toFixed(1) }, tr);
-        el("td", { text: r.high_min.toFixed(1), class: r.high_min >= 20 ? "hi" : r.high_min === 0 ? "lo" : "" }, tr);
-        el("td", { text: r.safe_min.toFixed(1) }, tr);
-        el("td", { text: pct(r.mean_p_lit) }, tr);
+        el("td", { text: rows.find((r) => r.hold === h).hold_ko }, tr);
+        for (const b of betas) {
+          const r = rows.find((x) => x.hold === h && x.beta_deg === b);
+          el("td", { html: `<b class="${r.high_min >= 20 ? "hi" : r.high_min === 0 ? "lo" : ""}">${r.high_min.toFixed(0)}분</b> / ${pct(r.mean_p_lit)}` }, tr);
+        }
       }
-      el("p", { class: "note", text: `고도 ${O.plan.altitude_km} km 원궤도, 한 바퀴 ${O.plan.rows[0].period_min.toFixed(1)}분, 카메라-목표 ${O.plan.dist_m.toFixed(1)} m. 위험 시간은 실패 지도(태양 각도별 실패율)로 예측한 값입니다.` }, $("#plan"));
+      const ecl = betas.map((b) => `β ${b}°: ${rows.find((r) => r.beta_deg === b).eclipse_min.toFixed(0)}분`).join(", ");
+      el("p", { class: "note", text: `고도 ${O.plan.altitude_km} km 원궤도, 한 바퀴 ${rows[0].period_min.toFixed(1)}분, 지구 그림자(식) ${ecl}. 위험 시간 = 실패 지도로 예측한 실패율이 ${pct(O.plan.high, 0)} 이상인 시간. β가 클수록 태양이 궤도면에서 벗어나 있습니다.` }, $("#plan"));
     }
     const passes = O.passes || [];
     if (!passes.length) { el("p", { class: "empty", text: "렌더링한 궤도 장면이 아직 없습니다." }, $("#pass-chips")); return; }
@@ -320,7 +323,8 @@
     let P = passes[0], k = 0, timer = null;
     const chips = $("#pass-chips");
     passes.forEach((p, i) => {
-      const b = el("button", { class: "chip", "aria-pressed": String(i === 0), text: `${p.hold_ko} · β ${p.beta_deg}°` }, chips);
+      const b = el("button", { class: "chip", "aria-pressed": String(i === 0), "data-hold": p.hold,
+                               text: `${p.hold_ko} · 실제 실패 ${pct((p.result || {}).actual_fail_rate)}` }, chips);
       b.addEventListener("click", () => { P = p; k = 0; [...chips.children].forEach((c, j) => c.setAttribute("aria-pressed", String(j === i))); setup(); });
     });
     const dia = $("#orbit-diagram"), tl = $("#timeline"), slider = $("#orbit-slider");
@@ -355,7 +359,7 @@
       tl.innerHTML = "";
       const Wt = 1000, x0 = 48, x1 = 985, T = P.period_s / 60;
       const X = (t) => x0 + (t / T) * (x1 - x0);
-      const top = [12, 108], bot = [128, 222];
+      const top = [26, 112], bot = [146, 226];
       const Yp = (v) => top[1] - (v / 180) * (top[1] - top[0]);
       const Yr = (v) => top[1] - v * (top[1] - top[0]);
       const Ye = (e) => bot[1] - ((Math.log10(Math.max(0.3, Math.min(180, e))) - Math.log10(0.3)) / (Math.log10(180) - Math.log10(0.3))) * (bot[1] - bot[0]);
@@ -370,15 +374,20 @@
       }
       svg("line", { x1: x0, x2: x1, y1: Ye(10), y2: Ye(10), stroke: C.fail, "stroke-dasharray": "3 4", opacity: 0.6 }, tl);
       const fr = P.frames;
-      svg("polyline", { points: fr.map((f) => `${X(f.t)},${Yp(f.phase)}`).join(" "), fill: "none", stroke: "#cfd3da", "stroke-width": 1.6 }, tl);
-      svg("polyline", { points: fr.map((f) => `${X(f.t)},${Yr(f.p_map)}`).join(" "), fill: "none", stroke: "#e0a03a", "stroke-width": 1.4, "stroke-dasharray": "5 4" }, tl);
+      // 식(그림자) 구간에는 프레임이 없으므로 선을 끊어 그린다
+      const segs = [[]];
+      fr.forEach((f, i) => { if (i && f.t - fr[i - 1].t > 1.5 * P.step_s / 60) segs.push([]); segs[segs.length - 1].push(f); });
+      for (const sg of segs) {
+        svg("polyline", { points: sg.map((f) => `${X(f.t)},${Yp(f.phase)}`).join(" "), fill: "none", stroke: "#cfd3da", "stroke-width": 1.6 }, tl);
+        svg("polyline", { points: sg.map((f) => `${X(f.t)},${Yr(f.p_map)}`).join(" "), fill: "none", stroke: "#e0a03a", "stroke-width": 1.4, "stroke-dasharray": "5 4" }, tl);
+      }
       for (const f of fr) {
         svg("circle", { cx: X(f.t), cy: Ye(f.eR == null ? 180 : f.eR), r: 2.6, fill: f.fail ? C.fail : C.ok }, tl);
         if (f.warn) svg("line", { x1: X(f.t), x2: X(f.t), y1: bot[1] + 6, y2: bot[1] + 14, stroke: C.warn, "stroke-width": 2 }, tl);
       }
-      svg("text", { x: x0 + 4, y: top[0] + 10 }, tl).textContent = "태양 위상각 (흰 선) · 실패 지도 예측 실패율 (주황 점선, 0~100%)";
-      svg("text", { x: x0 + 4, y: bot[0] + 10 }, tl).textContent = "실제 회전 오차 (초록 = 맞음, 빨강 = 10° 넘게 틀림) · 노란 눈금 = 자가 경고 · 밝은 띠 = 지구 그림자";
-      for (let m = 0; m <= T; m += 15) svg("text", { x: X(m), y: 246, "text-anchor": "middle" }, tl).textContent = `${m}분`;
+      svg("text", { x: x0, y: top[0] - 10 }, tl).textContent = "태양 위상각 (흰 선, 0~180°) · 실패 지도 예측 실패율 (주황 점선, 0~100%)";
+      svg("text", { x: x0, y: bot[0] - 10 }, tl).textContent = "실제 회전 오차 (초록 = 맞음, 빨강 = 10° 넘게 틀림) · 노란 눈금 = 자가 경고 · 밝은 띠 = 지구 그림자";
+      for (let m = 0; m <= T; m += 15) svg("text", { x: X(m), y: 266, "text-anchor": "middle" }, tl).textContent = `${m}분`;
       playhead = svg("line", { y1: top[0], y2: bot[1], stroke: "#fff", "stroke-width": 1.2 }, tl);
       tl.onclick = (ev) => {
         const r = tl.getBoundingClientRect(), t = ((ev.clientX - r.left) / r.width * Wt - x0) / (x1 - x0) * T;

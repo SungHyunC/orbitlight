@@ -194,7 +194,10 @@ def orbit_section(proj: Projector, a, effi_T: bool) -> dict:
             c["t"].append(round(float(r["t_min"]), 2))
             c["p"].append(None if r["p_fail_map"] in ("", "None") else round(float(r["p_fail_map"]), 4))
             c["eclipse"].append(r["eclipse"] == "True")
-    for res_path in sorted((ROOT / "outputs" / "orbit").glob(f"speedplus_orbit_*_{a.wd}.json")):
+    order = {"rbar-": 0, "vbar-": 1, "hbar-": 2, "hbar+": 3, "vbar+": 4}
+    paths = sorted((ROOT / "outputs" / "orbit").glob(f"speedplus_orbit_*_{a.wd}.json"),
+                   key=lambda q: order.get(json.loads(q.read_text())["hold"], 9))
+    for res_path in paths:
         res = json.loads(res_path.read_text())
         run = res["run"]
         rdir = ROOT / "outputs" / "renders" / run

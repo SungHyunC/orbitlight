@@ -62,7 +62,8 @@ image = (
     # 코드는 마지막 층: 코드를 고쳐도 위 층(torch, Blender)은 다시 만들지 않는다
     .add_local_dir(str(REPO), SRC, ignore=[
         ".git", ".git/**", ".venv", ".venv/**", "data/**", "outputs/**", "third_party/spnv2", "third_party/spnv2/**",
-        "**/__pycache__", "**/__pycache__/**", "**/*.pyc", "**/.DS_Store", "site/node_modules/**",
+        "**/__pycache__", "**/__pycache__/**", "**/*.pyc", "**/.DS_Store", "demo", "demo/**", "site", "site/**",
+        "docs", "docs/**", "experiments", "experiments/**", "README.md", "README.ko.md",
     ])
 )
 
@@ -88,6 +89,29 @@ def _workdir() -> Path:
         spn.parent.mkdir(parents=True, exist_ok=True)
         spn.symlink_to("/opt/spnv2")
     return w
+
+
+class _Autocommit:
+    """긴 작업 중에도 볼륨에 주기적으로 커밋해, 밖에서 진행 로그(outputs/.../train.log 등)를 볼 수 있게 한다."""
+
+    def __init__(self, every: float = 300.0):
+        import threading
+        self.every, self.stop = every, threading.Event()
+        self.t = threading.Thread(target=self._loop, daemon=True)
+
+    def _loop(self):
+        while not self.stop.wait(self.every):
+            try:
+                vol.commit()
+            except Exception as e:  # 커밋 실패는 작업을 멈추지 않는다
+                print(f"[autocommit] {e}", flush=True)
+
+    def __enter__(self):
+        self.t.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.stop.set()
 
 
 def _run(cmd: str, cwd: Path | str) -> int:
@@ -174,7 +198,8 @@ def fetch_data() -> None:
 def sh_cpu(cmd: str) -> int:
     w = _workdir()
     vol.reload()
-    rc = _run(cmd, w)
+    with _Autocommit():
+        rc = _run(cmd, w)
     vol.commit()
     return rc
 
@@ -184,7 +209,8 @@ def sh_gpu(cmd: str) -> int:
     w = _workdir()
     vol.reload()
     _run("nvidia-smi --query-gpu=name --format=csv,noheader", w)
-    rc = _run(cmd, w)
+    with _Autocommit():
+        rc = _run(cmd, w)
     vol.commit()
     return rc
 
@@ -200,6 +226,28 @@ def run_sh(cmd: str, gpu: str = "") -> None:
         rc = sh_gpu.remote(cmd) if len(gpus) > 1 else sh_gpu.with_options(gpu=gpus[0]).remote(cmd)
     if rc != 0:
         raise SystemExit(rc)
+
+
+@app.function(cpu=0.25, memory=512, timeout=12 * 3600)
+def chain(steps: list[list[str]]) -> list[int]:
+    """[["cpu"|"gpu", 명령], ...]을 Modal 안에서 차례로 돌린다. 실패하면 멈춘다.
+    `modal run --detach ...::run_chain`으로 띄우면 이 컴퓨터의 연결이 끊겨도 끝까지 간다."""
+    out = []
+    for kind, cmd in steps:
+        rc = (sh_gpu if kind == "gpu" else sh_cpu).remote(cmd)
+        out.append(rc)
+        print(f"[chain] {kind} rc={rc}: {cmd[:100]}", flush=True)
+        if rc != 0:
+            break
+    return out
+
+
+@app.local_entrypoint()
+def run_chain(steps_json: str) -> None:
+    rcs = chain.remote(json.loads(steps_json))
+    print("chain:", rcs)
+    if any(rcs):
+        raise SystemExit(1)
 
 
 # ---------------------------------------------------------------- 렌더 (여러 GPU로 나눠서)

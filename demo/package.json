@@ -1,0 +1,9 @@
+{
+  "name": "orbitlight-demo",
+  "private": true,
+  "type": "module",
+  "description": "웹 데모(site/)를 자동으로 조작하며 녹화한다 (demo/make.py가 호출)",
+  "dependencies": {
+    "playwright": "1.65.1"
+  }
+}
